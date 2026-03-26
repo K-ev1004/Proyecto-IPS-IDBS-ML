@@ -1,7 +1,0 @@
-echo ".venv/" > .gitignore
-echo "Dataset/" >> .gitignore
-echo "__pycache__/" >> .gitignore
-echo "evidencia/" >> .gitignore
-echo "*.db" >> .gitignore
-echo "*.log" >> .gitignore
-echo "*.zip" >> .gitignore

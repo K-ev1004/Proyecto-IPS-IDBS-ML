@@ -1,626 +1,517 @@
 # =============================================================================
 # interfasc.py — Interfaz Gráfica del IDS (Sistema de Detección de Intrusiones)
-# Construida con PyQt5 + Matplotlib. Muestra eventos en tiempo real,
-# tráfico en vivo, métricas SOC, gráficos y controles de monitoreo
+# Refactorizada con PyQt-Fluent-Widgets siguiendo Fluent Design (Windows 11)
 # =============================================================================
 
-# Módulos estándar
-import sys       # sys.exit() para cierre limpio de la app Qt
-import os        # Rutas de archivos y directorios
-import time      # Timestamps para métricas (PPS, uptime)
-import csv       # Exportación de eventos a CSV
-import logging   # Sistema de logs en archivo para depuración
-import re        # Expresiones regulares para extracción de IPs del warnbox
+import sys
+import os
+import time
+import csv
+import logging
+import re
+from collections import Counter, deque
+from datetime import datetime
+from threading import Lock
 
-# Estructuras de datos de alto rendimiento
-from collections import Counter, deque  # Counter: frecuencia; deque: buffer circular
-from datetime import datetime           # Formateo de timestamps para nombres de archivos
-from threading import Lock              # Mutex para acceso thread-safe a datos compartidos
-
-# PyQt5: Framework de interfaz gráfica multiplataforma
 from PyQt5.QtWidgets import (
-    QApplication,     # Núcleo de la aplicación Qt (event loop)
-    QWidget,          # Widget base para ventanas y contenedores
-    QVBoxLayout,      # Layout vertical (apila widgets de arriba a abajo)
-    QHBoxLayout,      # Layout horizontal (coloca widgets lado a lado)
-    QPushButton,      # Botón interactivo con texto
-    QLabel,           # Etiqueta de texto no editable
-    QTableWidget,     # Tabla con filas/columnas para eventos detectados
-    QTableWidgetItem, # Celda individual de la tabla
-    QHeaderView,      # Control de cabeceras de tabla
-    QFileDialog,      # Diálogo nativo del SO para seleccionar archivos
-    QSplitter,        # Divisor redimensionable entre dos paneles
-    QTabWidget,       # Contenedor de pestañas para múltiples vistas
-    QGroupBox,        # Caja agrupadora con título (panel visual)
-    QStatusBar,       # Barra de estado en la parte inferior
-    QSpinBox,         # Campo numérico con flechas arriba/abajo
-    QCheckBox,        # Casilla de verificación booleana
-    QPlainTextEdit,   # Área de texto de solo lectura (más eficiente que QTextEdit)
-    QMessageBox,      # Diálogos modales de mensajes
-    QComboBox,        # Lista desplegable de opciones
-    QLineEdit,        # Campo de texto de una línea para búsqueda
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
+    QTableWidgetItem, QHeaderView, QFileDialog, QSplitter,
+    QMessageBox
 )
-from PyQt5.QtCore import (
-    QTimer,      # Timer de Qt integrado con el event loop (no usa hilos)
-    Qt,          # Constantes globales de Qt (alineaciones, flags, atributos)
-    QThread,     # Clase base para hilos Qt con soporte de señales
-    pyqtSignal,  # Decorador para definir señales Qt personalizadas
-)
-from PyQt5.QtGui import (
-    QFont,   # Fuentes tipográficas (familia, tamaño, bold)
-    QColor,  # Representación de colores RGB/hex para celdas
-    QBrush,  # Pincel para colores de fondo/texto en QTableWidget
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont, QColor, QBrush
+
+# qfluentwidgets para diseño moderno
+from qfluentwidgets import (
+    FluentWindow, NavigationItemPosition, InfoBar, InfoBarPosition,
+    PrimaryPushButton, TransparentPushButton, TableWidget,
+    ComboBox, LineEdit, SpinBox, CheckBox, PlainTextEdit,
+    SubtitleLabel, BodyLabel, TitleLabel, Theme, setTheme, FluentIcon as FIF
 )
 
-# Matplotlib embebido en Qt5 para gráficos dentro de la ventana
+# Matplotlib
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure          # Figura contenedora del gráfico
-from matplotlib import style                  # Estilos predefinidos de Matplotlib
-from matplotlib import cm                     # Colormaps para paletas automáticas
-from matplotlib import colors as mcolors      # Utilidades de conversión de colores
+from matplotlib.figure import Figure
+from matplotlib import style
+from matplotlib import cm
+from matplotlib import colors as mcolors
 
-# Módulo interno para verificación de reputación IP en AbuseIPDB
+# Módulo interno
 from abuseipdb_module import GestorAbuseIPDB
 
-# BASE_DIR: Ruta absoluta al directorio del proyecto
-# Necesario para cargar recursos (imagen de fondo, logs) de forma portátil
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Importación condicional del motor IDS — si falla, la UI arranca sin monitoreo
 try:
     import ids
-    import respuesta_activa  # Para desbloqueo manual desde la UI
+    import respuesta_activa
 except Exception as _e:
     ids = None
     respuesta_activa = None
     logging.error("No se pudo importar 'ids' o 'respuesta_activa'. Detalle: %s", _e)
 
-# Activa el tema oscuro de Matplotlib para los gráficos embebidos
 style.use('dark_background')
 
-
-# =============================================================================
 # CONSTANTES DE RENDIMIENTO
-# Controlan límites de memoria y frecuencia de actualización de la UI
-# =============================================================================
-MAX_EVENTOS_TABLA   = 1000   # Filas visibles máximas en la tabla (evita lag de scroll)
-MAX_EVENTOS_MEMORIA = 10000  # Límite total en el deque global (evita memory leak)
-MAX_TRAFICO_LINEAS  = 500    # Líneas máximas en el panel "Tráfico en Vivo"
-UPDATE_BATCH_SIZE   = 50     # Eventos procesados por ciclo del DataProcessor
+MAX_EVENTOS_TABLA   = 1000
+MAX_EVENTOS_MEMORIA = 10000
+MAX_TRAFICO_LINEAS  = 500
+UPDATE_BATCH_SIZE   = 50
 
+FLUENT_COLORS = ['#0078D4', '#00BCF2', '#107C10', '#D83B01', '#E81123', '#5C2D91']
 
-# =============================================================================
-# ATTACK_STYLE: Mapa de tipos de ataque → color de resaltado en la tabla
-# Cada tipo tiene un color distintivo para identificación visual rápida (SOC)
-# =============================================================================
-ATTACK_STYLE = {
-    "Inyección SQL":  {"color": "#ff5370"},  # Rojo
-    "PORT scanner":   {"color": "#bb86fc"},  # Violeta
-    "DDOS":           {"color": "#00eaff"},  # Cian
-    "SYN FLOOD":      {"color": "#82b1ff"},  # Azul claro
-    "UDP Flood":      {"color": "#ffa000"},  # Naranja
-}
+def colors_for_labels(labels):
+    return [FLUENT_COLORS[i % len(FLUENT_COLORS)] for i in range(len(labels))]
 
+eventos_detectados = deque(maxlen=MAX_EVENTOS_MEMORIA)
+advertencias_cont  = {}
+trafico_buffer     = deque(maxlen=MAX_TRAFICO_LINEAS)
+data_lock          = Lock()
 
-# =============================================================================
-# FUNCIÓN: colors_for_labels
-# Propósito: Asigna un color a cada etiqueta de ataque para el gráfico de pastel
-# Respeta ATTACK_STYLE para tipos conocidos; usa colormap para los demás
-# Parámetros:
-#   labels    — Lista de strings con los tipos de ataque detectados
-#   cmap_name — Nombre del colormap de Matplotlib (default: "tab20")
-# Retorna: Lista de strings de color hexadecimal en el mismo orden que labels
-# =============================================================================
-def colors_for_labels(labels, cmap_name="tab20"):
-    # cm.get_cmap(): Obtiene el objeto colormap con N colores discretos
-    cmap = cm.get_cmap(cmap_name, 20)
-    out = []
-    for lab in labels:
-        st = ATTACK_STYLE.get(lab, {})
-        if st.get("color"):
-            out.append(st["color"])  # Color definido manualmente
-        else:
-            # Color determinista por hash: mismo tipo → mismo color siempre
-            # abs(hash(lab)) % cmap.N: Mapea el string a un índice del colormap
-            idx = abs(hash(lab)) % cmap.N
-            out.append(mcolors.to_hex(cmap(idx)))  # Convierte RGBA → hex string
-    return out
-
-
-# =============================================================================
-# ESTRUCTURAS DE DATOS GLOBALES
-# deque(maxlen=N): Buffer circular — al llenarse, descarta los más antiguos
-# Lock(): Mutex para garantizar consistencia al acceder desde múltiples hilos
-# =============================================================================
-eventos_detectados = deque(maxlen=MAX_EVENTOS_MEMORIA)  # Eventos del IDS
-advertencias_cont  = {}                                  # Conteo de alertas por IP
-trafico_buffer     = deque(maxlen=MAX_TRAFICO_LINEAS)   # Líneas de tráfico en vivo
-data_lock          = Lock()  # Protege las estructuras anteriores contra race conditions
-
-
-# =============================================================================
-# CLASE: DataProcessor (QThread)
-# Propósito: Procesa eventos en un hilo de background para no bloquear la UI
-# Patrón: Producer-Consumer — ids.py produce eventos; DataProcessor los consume
-# =============================================================================
 class DataProcessor(QThread):
-    # pyqtSignal(list): Señal emitida cuando un lote de eventos está listo para la UI
     data_ready  = pyqtSignal(list)
-    # pyqtSignal(dict): Señal emitida con estadísticas actualizadas del sistema
     stats_ready = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
         self.running       = False
-        self.pending_events = deque()  # Cola interna de eventos sin procesar
+        self.pending_events = deque()
 
     def add_events(self, events):
-        # Extiende la cola interna con nuevos eventos — thread-safe por el GIL de Python
         self.pending_events.extend(events)
 
     def run(self):
-        # Método principal del hilo — se ejecuta cuando se llama a .start()
         self.running = True
         while self.running:
             if self.pending_events:
-                # Procesa hasta UPDATE_BATCH_SIZE eventos por ciclo (evita sobrecarga)
                 batch = []
                 for _ in range(min(UPDATE_BATCH_SIZE, len(self.pending_events))):
                     if self.pending_events:
                         batch.append(self.pending_events.popleft())
 
                 if batch:
-                    # Emite señal con el lote → la UI lo recibe en su hilo principal
                     self.data_ready.emit(batch)
-
-                    # Calcula estadísticas sobre los últimos 100 eventos
                     with data_lock:
                         stats = {
                             'total_eventos': len(eventos_detectados),
                             'ips_unicas':    len(advertencias_cont),
-                            # Counter sobre índice 6 (tipo de ataque) de los últimos 100 eventos
                             'tipos_ataques': dict(Counter([e[6] for e in list(eventos_detectados)[-100:]]))
                         }
                     self.stats_ready.emit(stats)
 
-            self.msleep(100)  # Pausa 100ms entre ciclos para no saturar CPU
+            self.msleep(100)
 
     def stop(self):
-        # Señaliza el bucle para que termine y espera a que el hilo concluya
         self.running = False
         self.quit()
         self.wait()
 
-
-# =============================================================================
-# CLASE: IDSInterface (QWidget)
-# Ventana principal de la aplicación — construida con layouts anidados
-# =============================================================================
-class IDSInterface(QWidget):
+class IDSInterface(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("IDS UNIPAZ - Interfaz de Monitoreo")
-        self.setGeometry(100, 100, 1200, 800)  # Posición x,y y tamaño inicial
-        self.setObjectName("mainWindow")  # ID para selector de QSS (CSS de Qt)
+        self.setWindowTitle("IDS UNIPAZ - Sistema de Detección de Intrusiones")
+        self.resize(1350, 900)
         self.modo_oscuro = True
+        
+        self.last_table_update     = 0
+        self.last_graph_update     = 0
+        self.update_pending        = False
+        self.graph_update_pending  = False
+        self.auto_scroll_enabled   = True
+        self.show_all_events       = False
 
-        # --- ATRIBUTOS DE CONTROL DE RENDIMIENTO ---
-        self.last_table_update     = 0      # Timestamp del último refresco de tabla
-        self.last_graph_update     = 0      # Timestamp del último refresco de gráfico
-        self.update_pending        = False  # Bandera: hay actualización de tabla pendiente
-        self.graph_update_pending  = False  # Bandera: hay actualización de gráfico pendiente
-        self.auto_scroll_enabled   = True   # Scroll automático al último evento
-        self.show_all_events       = False  # Muestra todos vs. solo MAX_EVENTOS_TABLA
+        self.history_pps = deque([0]*60, maxlen=60)
+        self.history_alerts = deque([0]*60, maxlen=60)
 
-        # Inicia el hilo procesador y conecta sus señales a métodos de la UI
         self.data_processor = DataProcessor()
         self.data_processor.data_ready.connect(self.process_event_batch)
         self.data_processor.stats_ready.connect(self.update_stats)
-        self.data_processor.start()  # Arranca el QThread
+        self.data_processor.start()
 
-        self.setup_styles()   # Aplica hojas de estilo QSS y carga imagen de fondo
-        self.setFont(QFont("Segoe UI", 10))
-        self.last_hover_row = -1  # Fila con hover actual (para efectos visuales)
+        self.setup_styles()
+        self.last_hover_row = -1
 
-        # Construye toda la estructura de widgets de la ventana
         self.setup_ui()
 
-        # Métricas SOC (Security Operations Center)
-        self._pps_count  = 0          # Paquetes por segundo (contador instantáneo)
-        self._alert_ts   = deque(maxlen=5000)  # Timestamps de alertas para calcular alertas/min
-        self._start_time = None       # Tiempo de inicio para cálculo de uptime
+        self._pps_count  = 0
+        self._alert_ts   = deque(maxlen=5000)
+        self._start_time = None
 
-        # Debounce para resize: espera 60ms inactivo antes de recalcular proporciones
-        # Evita repintado continuo mientras el usuario arrastra el borde de la ventana
         self._resize_timer = QTimer(self)
-        self._resize_timer.setSingleShot(True)  # Se dispara una sola vez por activación
+        self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._apply_table_proportions)
 
-        self.setup_timers()   # Crea y configura todos los QTimers del sistema
-        self.setup_signals()  # Conecta señales de ids.py con slots de la interfaz
+        self.setup_timers()
+        self.setup_signals()
 
-    def agregar_evento_deprecated(self, evento):
-        # Versión obsoleta de agregar_evento — reemplazada por agregar_evento_()
-        # Conservada por compatibilidad pero no se usa en el flujo principal
-        with data_lock:
-            eventos_detectados.append(evento)
-            try:
-                self._alert_ts.append(time.time())
-            except Exception:
-                pass
-            ip = evento[1]
-            advertencias_cont[ip] = advertencias_cont.get(ip, 0) + 1
-            if self._es_ip_externa(ip):
-                self.ips_a_verificar_cola.add(ip)
-        self.data_processor.add_events([evento])
-
-    def _es_ip_externa(self, ip):
-        """Verifica si una IP es externa (no privada/reservada)."""
-        # Limpieza defensiva del string antes de procesar
-        ip_limpia = str(ip).strip()
-        if not ip_limpia:
-            return False
-
-        # Validación básica de formato IPv4 (debe tener exactamente 4 octetos)
-        partes = ip_limpia.split('.')
-        if len(partes) != 4:
-            return False
-
-        try:
-            octeto1 = int(partes[0])
-            octeto2 = int(partes[1])
-
-            # Exclusión de rangos privados y especiales según RFC 1918 y IANA:
-            if octeto1 == 10: return False                               # 10.0.0.0/8
-            if octeto1 == 172 and 16 <= octeto2 <= 31: return False     # 172.16.0.0/12
-            if octeto1 == 192 and octeto2 == 168: return False          # 192.168.0.0/16
-            if octeto1 == 127 or octeto1 == 0 or octeto1 >= 224: return False  # Loopback/Multicast
-            return True
-        except:
-            return False
-
-    def verificar_ips_abuse(self):
-        """Verifica IPs externas contra la API de AbuseIPDB."""
-        ips_encontradas = set()
-
-        # Prioridad 1: Extraer IPs del cuadro de advertencias con regex
-        try:
-            texto_adv = self.advertencias.toPlainText()
-            if texto_adv:
-                patron_ip = r"\b(?:\d{1,3}\.){3}\d{1,3}\b"  # Regex para IPv4
-                for ip in re.findall(patron_ip, texto_adv):
-                    if self._es_ip_externa(ip):
-                        ips_encontradas.add(ip)
-        except Exception as e:
-            logging.error(f"Error extrayendo IPs del warnbox: {e}")
-
-        # Prioridad 2: Buscar en columnas IP Origen (col 1) e IP Destino (col 2) de la tabla
-        if not ips_encontradas and hasattr(self, "table"):
-            try:
-                for fila in range(self.table.rowCount()):
-                    for col in (1, 2):
-                        item = self.table.item(fila, col)
-                        if item and item.text().strip():
-                            ip = item.text().strip()
-                            if self._es_ip_externa(ip):
-                                ips_encontradas.add(ip)
-            except Exception as e:
-                logging.error(f"Error extrayendo IPs de la tabla: {e}")
-
-        # Prioridad 3: Usar la cola acumulada de IPs detectadas
-        if not ips_encontradas and self.ips_a_verificar_cola:
-            ips_encontradas = set(self.ips_a_verificar_cola)
-
-        if not ips_encontradas:
-            self.status.showMessage("No se encontraron IPs externas para verificar", 3000)
-            self.ips_a_verificar_cola.clear()
-            return
-
-        ips_lista = list(ips_encontradas)
-        self.status.showMessage(f"Verificando {len(ips_lista)} IPs en AbuseIPDB...", 5000)
-
-        # Lanza la verificación asíncrona — los callbacks actualizan la UI al completar
-        self.gestor_abuse.verificar_ips(
-            ips_lista,
-            callback_resultado=self.mostrar_resultado_abuse,
-            callback_error=self.mostrar_error_abuse
-        )
-
-    def mostrar_resultado_abuse(self, resultado):
-        # resultado: dict con ip, abuse_score (0-100), riesgo, total_reports, pais
-        ip      = resultado['ip']
-        score   = resultado['abuse_score']
-        riesgo  = resultado['riesgo']
-        reports = resultado['total_reports']
-        pais    = resultado['pais']
-
-        # Prepend: Inserta el nuevo resultado arriba del texto existente
-        linea = f"\n🔍 AbuseIPDB | {ip} | Score: {score}% | {riesgo} | Reports: {reports} | {pais}"
-        texto_actual = self.advertencias.toPlainText()
-        self.advertencias.setPlainText(linea + "\n" + texto_actual)
-
-        # Alerta visual adicional para IPs con riesgo crítico
-        if "CRÍTICO" in riesgo:
-            self.status.showMessage(f"[!]️ IP CRÍTICA DETECTADA: {ip}", 5000)
-
-    def mostrar_error_abuse(self, error_msg):
-        logging.error(f"Error AbuseIPDB: {error_msg}")
-        linea = f"\n[X] AbuseIPDB Error: {error_msg}"
-        self.advertencias.setPlainText(linea + "\n" + self.advertencias.toPlainText())
-
-    def exportar_reporte_abuse(self):
-        # QFileDialog.getSaveFileName(): Abre diálogo nativo del OS para elegir ruta
-        ruta, _ = QFileDialog.getSaveFileName(
-            self, "Guardar Reporte AbuseIPDB", "reporte_abuse.json", "JSON Files (*.json)"
-        )
-        if ruta:
-            self.gestor_abuse.exportar_reporte(ruta)
-            self.status.showMessage(f"Reporte guardado: {ruta}", 5000)
+    def mostrar_mensaje(self, titulo, mensaje, tipo="info"):
+        if tipo == "info":
+            InfoBar.info(title=titulo, content=mensaje, position=InfoBarPosition.TOP, duration=3000, parent=self)
+        elif tipo == "success":
+            InfoBar.success(title=titulo, content=mensaje, position=InfoBarPosition.TOP, duration=3000, parent=self)
+        elif tipo == "warning":
+            InfoBar.warning(title=titulo, content=mensaje, position=InfoBarPosition.TOP, duration=5000, parent=self)
+        elif tipo == "error":
+            InfoBar.error(title=titulo, content=mensaje, position=InfoBarPosition.TOP, duration=5000, parent=self)
 
     def setup_styles(self):
-        """Aplica QSS (CSS de Qt) e inicializa el gestor AbuseIPDB."""
-        imagen_fondo = os.path.join(BASE_DIR, 'aed04dd0-dcaa-4ac2-8c8f-3bfca505b67f.png')
-        if os.path.exists(imagen_fondo):
-            # replace('\\', '/'): Qt espera barras / en rutas dentro de QSS en Windows
-            imagen_fondo_qt = imagen_fondo.replace("\\", "/")
-            self.setStyleSheet(
-                self.estilo_moderno() + f"""
-                #mainWindow {{
-                    background-image: url('{imagen_fondo_qt}');
-                    background-repeat: no-repeat;
-                    background-position: center;
-                }}
-                """
-            )
-        else:
-            self.setStyleSheet(self.estilo_moderno())  # Solo estilos sin imagen
-
-        # Inicializa el gestor de AbuseIPDB con la API key
         self.api_key_abuse = "31b904b493a50236fd7bd08163d01b562ce7a5127dc3968ef589d808232696ce3ea1b68e695323d4"
-        self.gestor_abuse       = GestorAbuseIPDB(self.api_key_abuse)
-        self.ips_a_verificar_cola = set()  # Cola de IPs pendientes de verificar
+        self.gestor_abuse = GestorAbuseIPDB(self.api_key_abuse)
+        self.ips_a_verificar_cola = set()
+
+    def aplicar_estilos_badges(self):
+        bg = "#272727" if self.modo_oscuro else "#ffffff"
+        border = "#3e3e42" if self.modo_oscuro else "#e1dfdd"
+
+        def b_style(color):
+            return f"padding: 10px 16px; border-radius: 6px; font-weight: 500; font-size: 13px; background-color: {bg}; color: {color}; border: 1px solid {border}; border-left: 4px solid {color};"
+
+        c_blue = "#4daafc" if self.modo_oscuro else "#0078d4"
+        c_green = "#6ccb5f" if self.modo_oscuro else "#107c10"
+        c_red = "#ff99a4" if self.modo_oscuro else "#d13438"
+        c_orange = "#ffb38f" if self.modo_oscuro else "#d83b01"
+        c_purple = "#b4a0ff" if self.modo_oscuro else "#5c2d91"
+
+        if hasattr(self, 'iface_badge'):
+            self.iface_badge.setStyleSheet(b_style(c_blue))
+            self.lbl_pps.setStyleSheet(b_style(c_purple))
+            self.lbl_alerts_min.setStyleSheet(b_style(c_red))
+            self.lbl_uptime.setStyleSheet(b_style(c_green))
+            self.lbl_stats.setStyleSheet(b_style(c_orange))
+
+        if hasattr(self, 'lbl_total_bloqueadas'):
+            self.lbl_total_bloqueadas.setStyleSheet(b_style(c_blue))
+            self.lbl_bloqueos_activos.setStyleSheet(b_style(c_red))
+            self.lbl_bloqueos_expirados.setStyleSheet(b_style(c_green))
+            self.lbl_ultimo_ataque.setStyleSheet(b_style(c_orange))
 
     def setup_ui(self):
-        """Construye la estructura completa de la interfaz con layouts anidados."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        self.page_dashboard = QWidget()
+        self.page_dashboard.setObjectName("page_dashboard")
+        self.setup_dashboard_page()
 
-        # Título de la ventana
-        header = QLabel("IDS UNIPAZ - Sistema de Detección de Intrusiones")
-        header.setAlignment(Qt.AlignCenter)  # Qt.AlignCenter: centrado horizontal y vertical
-        header.setFont(QFont("Segoe UI", 16, QFont.Bold))
-        layout.addWidget(header)
+        self.page_ips = QWidget()
+        self.page_ips.setObjectName("page_ips")
+        self.setup_ips_page()
 
-        # --- BARRA SUPERIOR SOC (métricas + filtros) ---
-        topbar = QHBoxLayout()
-        topbar.setSpacing(10)
+        self.page_stats = QWidget()
+        self.page_stats.setObjectName("page_stats")
+        self.setup_stats_page()
 
-        # Badge de interfaz — muestra nombre de interfaz y estado running/stopped
-        self.iface_badge = QLabel("Interfaz: N/A | ○ Stopped")
-        self.iface_badge.setObjectName("ifaceBadge")
-        self.iface_badge.setStyleSheet("""
-            QLabel#ifaceBadge {
-                padding: 4px 10px; border: 1px solid #03dac6;
-                border-radius: 10px; font-size: 10px;
-                color: #e0e0e0; background: rgba(0,0,0,0.35);
-            }
-        """)
-        topbar.addWidget(self.iface_badge)
+        self.page_settings = QWidget()
+        self.page_settings.setObjectName("page_settings")
+        self.setup_settings_page()
 
-        # Métricas en tiempo real: PPS, alertas por minuto, uptime
-        self.lbl_pps = QLabel("PPS: 0")
-        self.lbl_pps.setStyleSheet("padding:4px 8px; border:1px solid #333; border-radius:10px; font-size:10px;")
-        topbar.addWidget(self.lbl_pps)
+        self.addSubInterface(self.page_dashboard, FIF.HOME, "Dashboard")
+        self.addSubInterface(self.page_ips, FIF.VPN, "Respuesta Activa (IPS)")
+        self.addSubInterface(self.page_stats, FIF.PIE_SINGLE, "Estadísticas Avanzadas")
+        self.addSubInterface(self.page_settings, FIF.SETTING, "Configuración", NavigationItemPosition.BOTTOM)
 
-        self.lbl_alerts_min = QLabel("Alertas/min: 0")
-        self.lbl_alerts_min.setStyleSheet("padding:4px 8px; border:1px solid #333; border-radius:10px; font-size:10px;")
-        topbar.addWidget(self.lbl_alerts_min)
+        self.aplicar_estilos_badges()
 
-        self.lbl_uptime = QLabel("Uptime: 00:00:00")
-        self.lbl_uptime.setStyleSheet("padding:4px 8px; border:1px solid #333; border-radius:10px; font-size:10px;")
-        topbar.addWidget(self.lbl_uptime)
+    def setup_dashboard_page(self):
+        layout = QVBoxLayout(self.page_dashboard)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
 
-        topbar.addStretch()  # Espacio flexible que empuja los filtros a la derecha
+        header_layout = QHBoxLayout()
+        header = TitleLabel("Monitoreo SOC en Tiempo Real")
+        header_layout.addStretch()
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+        
+        btn_tema = TransparentPushButton(FIF.PALETTE, "Alternar Modo Claro/Oscuro")
+        btn_tema.clicked.connect(self.cambiar_tema)
+        header_layout.addWidget(btn_tema)
+        
+        layout.addLayout(header_layout)
 
-        # Campo de búsqueda en tiempo real — filtra filas visibles de la tabla
-        topbar.addWidget(QLabel("Buscar:"))
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("ip / tipo / puerto / protocolo ...")
-        self.search_input.setMinimumWidth(260)
-        # lambda _: ignora el parámetro del texto actual (no se necesita)
+        badges_layout = QHBoxLayout()
+        badges_layout.setSpacing(15)
+
+        self.iface_badge = BodyLabel("Interfaz: N/A | ○ Stopped")
+        self.lbl_pps = BodyLabel("PPS: 0")
+        self.lbl_alerts_min = BodyLabel("Alertas/min: 0")
+        self.lbl_uptime = BodyLabel("Uptime: 00:00:00")
+        self.lbl_stats = BodyLabel("Eventos: 0 | IPs únicas: 0")
+        
+        for lbl in [self.iface_badge, self.lbl_pps, self.lbl_alerts_min, self.lbl_uptime, self.lbl_stats]:
+            lbl.setAlignment(Qt.AlignCenter)
+            badges_layout.addWidget(lbl)
+            
+        layout.addLayout(badges_layout)
+
+        filtros_layout = QHBoxLayout()
+        filtros_layout.setSpacing(12)
+        filtros_layout.addStretch()
+
+        filtros_layout.addWidget(SubtitleLabel("Buscar:"))
+        self.search_input = LineEdit()
+        self.search_input.setPlaceholderText("IP, tipo, puerto, protocolo...")
+        self.search_input.setMinimumWidth(280)
         self.search_input.textChanged.connect(lambda _: self.apply_filters())
-        topbar.addWidget(self.search_input)
+        filtros_layout.addWidget(self.search_input)
 
-        # Filtro de severidad — muestra solo eventos de un nivel de criticidad
-        topbar.addWidget(QLabel("Severidad:"))
-        self.sev_filter = QComboBox()
+        filtros_layout.addWidget(SubtitleLabel("Severidad:"))
+        self.sev_filter = ComboBox()
         self.sev_filter.addItems(["Todos", "CRÍTICA", "ALTA", "MEDIA", "BAJA"])
         self.sev_filter.currentIndexChanged.connect(lambda _: self.apply_filters())
-        topbar.addWidget(self.sev_filter)
-        layout.addLayout(topbar)
+        filtros_layout.addWidget(self.sev_filter)
 
-        # --- CONTROLES DE RENDIMIENTO ---
+        layout.addLayout(filtros_layout)
+
+        splitter = QSplitter(Qt.Horizontal)
+        
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 10, 0)
+        
+        self.table = self.crear_tabla_eventos_optimizada()
+        self.table.itemSelectionChanged.connect(self.update_detail_panel)
+        left_layout.addWidget(SubtitleLabel("Registro de Eventos Detectados"))
+        left_layout.addWidget(self.table)
+        
+        self.advertencias = PlainTextEdit()
+        self.advertencias.setReadOnly(True)
+        self.advertencias.document().setMaximumBlockCount(100)
+        left_layout.addWidget(SubtitleLabel("Log de Advertencias (Top 100)"))
+        left_layout.addWidget(self.advertencias)
+
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(10, 0, 0, 0)
+
+        self.detalle_text = PlainTextEdit()
+        self.detalle_text.setReadOnly(True)
+        self.detalle_text.setPlainText("Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.")
+        right_layout.addWidget(SubtitleLabel("Inspección Forense del Evento"))
+        right_layout.addWidget(self.detalle_text)
+
+        self.trafico_en_vivo = PlainTextEdit()
+        self.trafico_en_vivo.setReadOnly(True)
+        self.trafico_en_vivo.document().setMaximumBlockCount(MAX_TRAFICO_LINEAS)
+        right_layout.addWidget(SubtitleLabel("Captura de Tráfico Raw (Live)"))
+        right_layout.addWidget(self.trafico_en_vivo)
+
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 4)
+
+        layout.addWidget(splitter)
+
+    def setup_ips_page(self):
+        layout = QVBoxLayout(self.page_ips)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
+
+        header_layout = QHBoxLayout()
+        header = TitleLabel("Panel de Respuesta Activa (IPS)")
+        header_layout.addStretch()
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        badges_layout = QHBoxLayout()
+        badges_layout.setSpacing(15)
+        
+        self.lbl_total_bloqueadas = BodyLabel("Total: 0")
+        self.lbl_bloqueos_activos = BodyLabel("Activos: 0")
+        self.lbl_bloqueos_expirados = BodyLabel("Expirados: 0")
+        self.lbl_ultimo_ataque = BodyLabel("Último ataque: —")
+
+        for lbl in [self.lbl_total_bloqueadas, self.lbl_bloqueos_activos, self.lbl_bloqueos_expirados, self.lbl_ultimo_ataque]:
+            lbl.setAlignment(Qt.AlignCenter)
+            badges_layout.addWidget(lbl)
+            
+        layout.addLayout(badges_layout)
+
+        self.table_bloqueos = TableWidget()
+        self.table_bloqueos.setColumnCount(7)
+        self.table_bloqueos.setHorizontalHeaderLabels([
+            "Hora", "IP Bloqueada", "Tipo de Ataque",
+            "Severidad", "Acción Aplicada", "Estado", "Tiempo Restante"
+        ])
+        self.table_bloqueos.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_bloqueos.verticalHeader().hide()
+        self.table_bloqueos.setEditTriggers(TableWidget.NoEditTriggers)
+        self.table_bloqueos.setSelectionBehavior(TableWidget.SelectRows)
+        self.table_bloqueos.setSelectionMode(TableWidget.SingleSelection)
+        self.table_bloqueos.setAlternatingRowColors(True)
+        self.table_bloqueos.setShowGrid(False)
+        self.table_bloqueos.setBorderVisible(True)
+        self.table_bloqueos.setBorderRadius(8)
+        
+        layout.addWidget(self.table_bloqueos)
+
         controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(15)
 
-        # Selector de interfaz de red captura (Ethernet, Wi-Fi, etc.)
-        controls_layout.addWidget(QLabel("Interfaz:"))
-        self.combo_iface = QComboBox()
-        self.combo_iface.setMinimumWidth(220)
+        btn_unblock = PrimaryPushButton(FIF.UNPIN, "Desbloquear IP")
+        btn_unblock.clicked.connect(self.desbloquear_ip_manual)
+        controls_layout.addWidget(btn_unblock)
+
+        self.input_manual_ip = LineEdit()
+        self.input_manual_ip.setPlaceholderText("IP a bloquear (ej. 192.168.1.50)")
+        self.input_manual_ip.setMinimumWidth(200)
+        controls_layout.addWidget(self.input_manual_ip)
+        
+        self.spin_manual_time = SpinBox()
+        self.spin_manual_time.setRange(1, 1440)
+        self.spin_manual_time.setValue(30)
+        self.spin_manual_time.setSuffix(" min")
+        controls_layout.addWidget(self.spin_manual_time)
+
+        btn_block_manual = TransparentPushButton(FIF.PIN, "Bloquear Manual")
+        btn_block_manual.clicked.connect(self.bloquear_ip_manual_ui)
+        controls_layout.addWidget(btn_block_manual)
+
+        controls_layout.addStretch()
+
+        btn_clear_expired = TransparentPushButton(FIF.DELETE, "Limpiar Inactivos")
+        btn_clear_expired.clicked.connect(self.limpiar_ips_expirados)
+        controls_layout.addWidget(btn_clear_expired)
+
+        btn_export_ips = TransparentPushButton(FIF.DOCUMENT, "Exportar Reglas (CSV)")
+        btn_export_ips.clicked.connect(self.exportar_reglas_ips)
+        controls_layout.addWidget(btn_export_ips)
+
+        layout.addLayout(controls_layout)
+
+        self._bloqueos_data = []
+
+    def setup_stats_page(self):
+        layout = QVBoxLayout(self.page_stats)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
+        
+        header_layout = QHBoxLayout()
+        header = TitleLabel("Análisis Avanzado de Amenazas")
+        header_layout.addStretch()
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        self.canvas_stats = FigureCanvas(Figure(figsize=(10, 8)))
+        self.fig_stats = self.canvas_stats.figure
+        
+        gs = self.fig_stats.add_gridspec(2, 2, height_ratios=[1, 1])
+        
+        self.ax_pie = self.fig_stats.add_subplot(gs[0, 0])
+        self.ax_bar = self.fig_stats.add_subplot(gs[0, 1])
+        self.ax_line = self.fig_stats.add_subplot(gs[1, :])
+        
+        layout.addWidget(self.canvas_stats)
+
+    def setup_settings_page(self):
+        layout = QVBoxLayout(self.page_settings)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(20)
+
+        header_layout = QHBoxLayout()
+        header = TitleLabel("Configuración y Operaciones del Sistema")
+        header_layout.addStretch()
+        header_layout.addWidget(header)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        controls_layout = QVBoxLayout()
+        controls_layout.setSpacing(20)
+
+        red_box = QHBoxLayout()
+        red_box.addWidget(SubtitleLabel("Interfaz de Red:"))
+        self.combo_iface = ComboBox()
+        self.combo_iface.setMinimumWidth(300)
         self.combo_iface.addItems(self.listar_interfaces_captura())
-        # Al cambiar interfaz, actualiza el badge de estado
         self.combo_iface.currentIndexChanged.connect(lambda _: self._set_running_state(self.monitoreo_activo))
-        controls_layout.addWidget(self.combo_iface)
+        red_box.addWidget(self.combo_iface)
+        red_box.addStretch()
+        controls_layout.addLayout(red_box)
 
-        # QCheckBox para auto-scroll: toggled emite bool con el nuevo estado
-        self.auto_scroll_cb = QCheckBox("Auto-scroll")
+        vista_box = QHBoxLayout()
+        vista_box.setSpacing(15)
+        self.auto_scroll_cb = CheckBox("Scroll Automático")
         self.auto_scroll_cb.setChecked(True)
         self.auto_scroll_cb.toggled.connect(self.toggle_auto_scroll)
-        controls_layout.addWidget(self.auto_scroll_cb)
+        vista_box.addWidget(self.auto_scroll_cb)
 
-        # QCheckBox para mostrar todos los eventos (puede ser lento con >10k eventos)
-        self.show_all_cb = QCheckBox("Mostrar todos los eventos")
+        self.show_all_cb = CheckBox("Mostrar historial completo")
         self.show_all_cb.toggled.connect(self.toggle_show_all)
-        controls_layout.addWidget(self.show_all_cb)
+        vista_box.addWidget(self.show_all_cb)
 
-        # QSpinBox para ajustar el límite de filas en la tabla dinámicamente
-        controls_layout.addWidget(QLabel("Máx. eventos tabla:"))
-        self.max_events_spin = QSpinBox()
+        vista_box.addWidget(SubtitleLabel("Límite de filas en UI:"))
+        self.max_events_spin = SpinBox()
         self.max_events_spin.setRange(100, 5000)
         self.max_events_spin.setValue(MAX_EVENTOS_TABLA)
         self.max_events_spin.valueChanged.connect(self.change_max_events)
-        controls_layout.addWidget(self.max_events_spin)
+        vista_box.addWidget(self.max_events_spin)
+        
+        vista_box.addStretch()
+        controls_layout.addLayout(vista_box)
 
-        # QCheckBox para Activar Modo IPS (Respuesta Activa)
-        self.ips_activo_cb = QCheckBox("MODO IPS (Bloqueo Automático)")
-        self.ips_activo_cb.setStyleSheet("color: #ff3b30; font-weight: bold; margin-left: 20px;")
+        self.ips_activo_cb = CheckBox("MODO IPS (Habilitar Bloqueo Automático)")
         self.ips_activo_cb.toggled.connect(self.toggle_ips_mode)
         controls_layout.addWidget(self.ips_activo_cb)
 
-        controls_layout.addStretch()
         layout.addLayout(controls_layout)
 
-        # --- SPLITTER PRINCIPAL: divide la ventana en panel izquierdo y derecho ---
-        # QSplitter: El usuario puede redimensionar los paneles arrastrando el divisor
-        splitter = QSplitter(Qt.Horizontal)
-        left  = QWidget()
-        right = QWidget()
-        self.setup_left_panel(left)
-        self.setup_right_panel(right)
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        # setStretchFactor: Define la proporción de expansión (4:6 → izq 40%, der 60%)
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 6)
-        splitter.setSizes([480, 720])  # Tamaños iniciales en píxeles
-        layout.addWidget(splitter)
-
-        # Barra de estado en la parte inferior de la ventana
-        self.status = QStatusBar()
-        layout.addWidget(self.status)
-
-    def setup_left_panel(self, left):
-        """Panel izquierdo: tabla de eventos + caja de advertencias."""
-        vi = QVBoxLayout(left)
-        lbl = QLabel("Eventos Detectados")
-        lbl.setFont(QFont("Segoe UI", 13, QFont.Bold))
-        vi.addWidget(lbl)
-
-        # Tabla optimizada — ver método crear_tabla_eventos_optimizada()
-        self.table = self.crear_tabla_eventos_optimizada()
-        self.table.itemSelectionChanged.connect(self.update_detail_panel)
-        vi.addWidget(self.table)
-
-        # QTimer.singleShot(0, ...): Ejecuta en el próximo ciclo del event loop
-        # Garantiza que el widget ya tiene tamaño asignado al aplicar proporciones
-        QTimer.singleShot(0, self._apply_table_proportions)
-
-        # Panel de advertencias — QPlainTextEdit es más eficiente que QTextEdit
-        # para texto de solo lectura con muchas actualizaciones
-        advert_box = QGroupBox("Advertencias")
-        advert_box.setObjectName("warnBox")  # ID para selector QSS
-        adv_layout = QVBoxLayout()
-        self.advertencias = QPlainTextEdit()
-        self.advertencias.setObjectName("warnText")
-        self.advertencias.setReadOnly(True)
-        self.advertencias.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        # setMaximumBlockCount: Limita el historial a 100 líneas sin acumular en memoria
-        self.advertencias.document().setMaximumBlockCount(100)
-        adv_layout.addWidget(self.advertencias)
-        advert_box.setLayout(adv_layout)
-        vi.addWidget(advert_box)
-
-    def setup_right_panel(self, right):
-        """Panel derecho: detalle del evento, tráfico en vivo, gráfico y botones."""
-        vd = QVBoxLayout(right)
-
-        # Panel de detalle SOC — muestra info completa del evento seleccionado
-        detalle_box = QGroupBox("Detalle del Evento")
-        detalle_box.setObjectName("detailBox")
-        detalle_layout = QVBoxLayout()
-        self.detalle_text = QPlainTextEdit()
-        self.detalle_text.setReadOnly(True)
-        self.detalle_text.setFont(QFont("Segoe UI", 9))
-        self.detalle_text.document().setMaximumBlockCount(200)
-        self.detalle_text.setPlainText("Seleccione una alerta para ver el detalle.")
-        detalle_layout.addWidget(self.detalle_text)
-        detalle_box.setLayout(detalle_layout)
-        vd.addWidget(detalle_box)
-
-        # Panel de tráfico en vivo — feed de todos los paquetes capturados
-        trafico_box = QGroupBox("Tráfico en Vivo")
-        trafico_box.setObjectName("trafficBox")
-        trafico_layout = QVBoxLayout()
-        self.trafico_en_vivo = QPlainTextEdit()
-        self.trafico_en_vivo.setObjectName("trafficText")
-        self.trafico_en_vivo.setReadOnly(True)
-        self.trafico_en_vivo.setFont(QFont("Segoe UI", 9))
-        self.trafico_en_vivo.document().setMaximumBlockCount(MAX_TRAFICO_LINEAS)
-        trafico_layout.addWidget(self.trafico_en_vivo)
-        trafico_box.setLayout(trafico_layout)
-        vd.addWidget(trafico_box)
-
-        # QTabWidget con gráfico de distribución de ataques y tabla de bloqueos
-        self.tabs = QTabWidget()
+        layout.addWidget(SubtitleLabel("Acciones Globales"))
         
-        # Pestaña 1: Gráfico
-        self.canvas_pie  = FigureCanvas(Figure(figsize=(5, 4)))
-        self.axes_pie    = self.canvas_pie.figure.subplots()
-        self.tabs.addTab(self.canvas_pie, "GRAFICO ESTADÍSTICO")
+        acciones_layout = QHBoxLayout()
+        acciones_layout.setSpacing(12)
         
-        # Pestaña 2: Gestión de Bloqueos (IPS)
-        self.setup_ips_tab()
-
-        vd.addWidget(self.tabs)
-
-        self.setup_buttons(vd)  # Botones de control al fondo del panel
-
-    def setup_buttons(self, layout):
-        """Crea y agrega los botones de control al layout dado."""
-        btns = QHBoxLayout()
-        btns.setSpacing(8)
-        btns.setContentsMargins(0, 8, 0, 0)
-
-        # crear_boton(): Helper que instancia QPushButton y conecta la señal clicked
-        self.boton_iniciar         = self.crear_boton("Iniciar",             self.iniciar_monitoreo,   True)
-        self.boton_detener         = self.crear_boton("Detener",             self.detener_monitoreo,   False)
-        self.boton_limpiar         = self.crear_boton("Limpiar",             self.limpiar_tabla,       True)
-        self.boton_exportar        = self.crear_boton("Exportar CSV",        self.exportar_csv,        True)
-        self.boton_evidencia       = self.crear_boton("Evidencia",           self.generar_evidencia,   True)
-        self.boton_verificar_abuse = self.crear_boton("Verificar AbuseIPDB", self.verificar_ips_abuse, True)
-        self.boton_tema            = self.crear_boton("Modo Claro",          self.cambiar_tema,        True)
+        self.boton_iniciar = PrimaryPushButton("Iniciar Motor")
+        self.boton_iniciar.clicked.connect(self.iniciar_monitoreo)
+        
+        self.boton_detener = TransparentPushButton("Detener Motor")
+        self.boton_detener.clicked.connect(self.detener_monitoreo)
+        self.boton_detener.setEnabled(False)
+        
+        self.boton_limpiar = TransparentPushButton("Limpiar Registros")
+        self.boton_limpiar.clicked.connect(self.limpiar_tabla)
+        
+        self.boton_exportar = TransparentPushButton("Exportar Eventos CSV")
+        self.boton_exportar.clicked.connect(self.exportar_csv)
+        
+        self.boton_evidencia = TransparentPushButton("Generar Evidencia Gráfica")
+        self.boton_evidencia.clicked.connect(self.generar_evidencia)
+        
+        self.boton_verificar_abuse = TransparentPushButton("Verificar Base de Datos AbuseIPDB")
+        self.boton_verificar_abuse.clicked.connect(self.verificar_ips_abuse)
+        
+        self.boton_tema = TransparentPushButton("Alternar Apariencia (Dark/Light)")
+        self.boton_tema.clicked.connect(self.cambiar_tema)
 
         for b in [self.boton_iniciar, self.boton_detener, self.boton_limpiar,
                   self.boton_exportar, self.boton_evidencia,
                   self.boton_verificar_abuse, self.boton_tema]:
-            btns.addWidget(b)
-        layout.addLayout(btns)
+            acciones_layout.addWidget(b)
+            
+        acciones_layout.addStretch()
+        layout.addLayout(acciones_layout)
+        layout.addStretch()
 
     def setup_timers(self):
-        """Crea todos los QTimers — se inician en iniciar_monitoreo()."""
-        self.timer       = QTimer()  # Actualización de tabla (cada 3s al monitorear)
+        self.timer       = QTimer()
         self.timer.timeout.connect(self.actualizar_tabla_optimizada)
 
-        self.graf_timer  = QTimer()  # Actualización de gráfico (cada 10s)
+        self.graf_timer  = QTimer()
         self.graf_timer.timeout.connect(self.actualizar_grafico_auto)
 
-        self.pps_timer   = QTimer()  # PPS (paquetes/segundo) cada 1s
+        self.pps_timer   = QTimer()
         self.pps_timer.timeout.connect(self._tick_pps)
 
-        self.uptime_timer = QTimer()  # Uptime (tiempo activo) cada 1s
+        self.uptime_timer = QTimer()
         self.uptime_timer.timeout.connect(self._tick_uptime)
 
-        self.alerts_timer = QTimer()  # Alertas/minuto cada 5s
+        self.alerts_timer = QTimer()
         self.alerts_timer.timeout.connect(self._tick_alerts_per_min)
 
-        # Timer para countdown de bloqueos IPS (cada 1 segundo)
         self.bloqueos_timer = QTimer()
         self.bloqueos_timer.timeout.connect(self._tick_bloqueos_timer)
-        self.bloqueos_timer.start(1000)  # Siempre activo para actualizar expirados
+        self.bloqueos_timer.start(1000)
 
         self.monitoreo_activo = False
 
-        # Timers de guardado diario automático (24h en milisegundos)
         self.timer_guardar_diario = QTimer()
         self.timer_guardar_diario.timeout.connect(self.guardar_grafico_pie_diario)
         self.timer_guardar_diario.start(24 * 60 * 60 * 1000)
@@ -630,10 +521,7 @@ class IDSInterface(QWidget):
         self.timer_guardar_csv_diario.start(24 * 60 * 60 * 1000)
 
     def setup_signals(self):
-        """Conecta señales del módulo ids.py con métodos de esta interfaz."""
-        self.table.setMouseTracking(False)  # Deshabilita hover tracking (reduce eventos Qt)
-
-        # Conexión de señales del motor IDS al UI — puente entre hilos
+        self.table.setMouseTracking(False)
         if ids and hasattr(ids, 'comunicador'):
             try:
                 ids.comunicador.nuevo_evento.connect(self.agregar_evento_)
@@ -643,8 +531,7 @@ class IDSInterface(QWidget):
                 logging.error(f"No se pudieron conectar señales de 'ids': {e}")
 
     def crear_tabla_eventos_optimizada(self):
-        """Crea la tabla de eventos con optimizaciones de rendimiento."""
-        table = QTableWidget()
+        table = TableWidget()
         table.setColumnCount(8)
         table.setHorizontalHeaderLabels([
             "Sev", "Hora", "IP Origen", "IP Destino",
@@ -654,36 +541,31 @@ class IDSInterface(QWidget):
         header_h = table.horizontalHeader()
         header_v = table.verticalHeader()
 
-        # QHeaderView.Fixed: Los anchos de columna son controlados programáticamente
-        # (evita que Qt los recalcule en cada inserción, lo que causaría lag)
         header_h.setSectionResizeMode(QHeaderView.Fixed)
         header_h.setStretchLastSection(False)
         header_v.setSectionResizeMode(QHeaderView.Fixed)
-        header_v.setDefaultSectionSize(25)  # Alto de cada fila en píxeles
-        header_v.hide()  # Oculta numeración de filas para limpiar la UI
+        header_v.setDefaultSectionSize(25)
+        header_v.hide()
 
-        # Optimizaciones críticas:
-        table.setWordWrap(False)             # Evita cálculos de altura de línea
-        table.setSortingEnabled(False)       # El sorting dispara redibujado costoso
-        table.setAlternatingRowColors(True)  # Alternado de colores para legibilidad
-        table.setShowGrid(False)             # Sin grilla = menos píxeles a dibujar
-        table.setEditTriggers(QTableWidget.NoEditTriggers)   # Tabla de solo lectura
-        table.setSelectionBehavior(QTableWidget.SelectRows)  # Selecciona fila completa
-        table.setSelectionMode(QTableWidget.SingleSelection) # Solo una fila a la vez
+        table.setWordWrap(False)
+        table.setSortingEnabled(False)
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
+        table.setEditTriggers(TableWidget.NoEditTriggers)
+        table.setSelectionBehavior(TableWidget.SelectRows)
+        table.setSelectionMode(TableWidget.SingleSelection)
 
-        # ScrollPerPixel: Scroll suave en vez de por filas enteras
-        table.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
-        table.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
+        table.setVerticalScrollMode(TableWidget.ScrollPerPixel)
+        table.setHorizontalScrollMode(TableWidget.ScrollPerPixel)
+        table.setBorderVisible(True)
+        table.setBorderRadius(8)
 
-        # Anchos iniciales en píxeles (serán recalculados por _apply_table_proportions)
         for i, ancho in enumerate([120, 140, 140, 70, 90, 70, 220]):
             table.setColumnWidth(i, ancho)
 
         return table
 
     def agregar_evento_(self, evento):
-        """Versión optimizada: agrega a estructuras y delega el UI al DataProcessor."""
-        print(f"DEBUG - Evento recibido: {evento}")
         with data_lock:
             eventos_detectados.append(evento)
             try:
@@ -692,114 +574,25 @@ class IDSInterface(QWidget):
                 pass
             ip = evento[1]
             advertencias_cont[ip] = advertencias_cont.get(ip, 0) + 1
-        # No actualiza la UI directamente — usa batch processing para mejor rendimiento
         self.data_processor.add_events([evento])
 
     def agregar_trafico_(self, mensaje):
-        """Agrega línea al buffer de tráfico y actualiza el panel cada 10 mensajes."""
         try:
             self._pps_count += 1
         except Exception:
             self._pps_count = 1
         trafico_buffer.append(mensaje)
-        if len(trafico_buffer) % 10 == 0:  # Batch: actualiza cada 10 mensajes
+        if len(trafico_buffer) % 10 == 0:
             self.actualizar_trafico_batch()
 
-    def setup_ips_tab(self):
-        """Crea la pestaña profesional de Respuesta Activa IPS con tabla de 7 columnas,
-        badges de resumen en tiempo real y countdown de expiración."""
-        self.ips_tab = QWidget()
-        layout = QVBoxLayout(self.ips_tab)
-        layout.setSpacing(8)
-
-        # --- TÍTULO DEL PANEL ---
-        lbl_titulo = QLabel("RESPUESTA ACTIVA IPS — IPs Bloqueadas en Tiempo Real")
-        lbl_titulo.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        lbl_titulo.setStyleSheet("color: #ff3b30; padding: 4px;")
-        layout.addWidget(lbl_titulo)
-
-        # --- BADGES DE RESUMEN (indicadores SOC) ---
-        badges_layout = QHBoxLayout()
-        badges_layout.setSpacing(12)
-
-        badge_style = (
-            "padding: 6px 14px; border: 1px solid {color}; border-radius: 8px;"
-            "font-size: 11px; font-weight: bold; color: {color}; background: rgba(0,0,0,0.4);"
-        )
-
-        self.lbl_total_bloqueadas = QLabel("Total: 0")
-        self.lbl_total_bloqueadas.setStyleSheet(badge_style.format(color="#03dac6"))
-        badges_layout.addWidget(self.lbl_total_bloqueadas)
-
-        self.lbl_bloqueos_activos = QLabel("Activos: 0")
-        self.lbl_bloqueos_activos.setStyleSheet(badge_style.format(color="#ff3b30"))
-        badges_layout.addWidget(self.lbl_bloqueos_activos)
-
-        self.lbl_bloqueos_expirados = QLabel("Expirados: 0")
-        self.lbl_bloqueos_expirados.setStyleSheet(badge_style.format(color="#ffd60a"))
-        badges_layout.addWidget(self.lbl_bloqueos_expirados)
-
-        self.lbl_ultimo_ataque = QLabel("Ultimo ataque: —")
-        self.lbl_ultimo_ataque.setStyleSheet(badge_style.format(color="#bb86fc"))
-        badges_layout.addWidget(self.lbl_ultimo_ataque)
-
-        badges_layout.addStretch()
-        layout.addLayout(badges_layout)
-
-        # --- TABLA DE BLOQUEOS (7 columnas profesionales) ---
-        self.table_bloqueos = QTableWidget()
-        self.table_bloqueos.setColumnCount(7)
-        self.table_bloqueos.setHorizontalHeaderLabels([
-            "Hora", "IP Bloqueada", "Tipo de Ataque",
-            "Severidad", "Accion Aplicada", "Estado", "Tiempo Restante"
-        ])
-        header = self.table_bloqueos.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
-        self.table_bloqueos.verticalHeader().hide()
-        self.table_bloqueos.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table_bloqueos.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_bloqueos.setSelectionMode(QTableWidget.SingleSelection)
-        self.table_bloqueos.setAlternatingRowColors(True)
-        self.table_bloqueos.setShowGrid(False)
-        self.table_bloqueos.setStyleSheet("""
-            QTableWidget { background-color: #0a0a0a; gridline-color: #222; }
-            QHeaderView::section {
-                background-color: #1a1a1a; color: #ff3b30;
-                padding: 5px; border: 1px solid #333;
-                font-weight: bold; font-size: 10px;
-            }
-        """)
-        layout.addWidget(self.table_bloqueos)
-
-        # --- BOTÓN DE DESBLOQUEO MANUAL ---
-        btn_unblock = QPushButton("Desbloquear IP Seleccionada")
-        btn_unblock.setStyleSheet(
-            "background-color: #292929; color: #4CAF50; border: 1px solid #4CAF50;"
-            "border-radius: 4px; padding: 6px 14px; font-weight: bold;"
-        )
-        btn_unblock.clicked.connect(self.desbloquear_ip_manual)
-        layout.addWidget(btn_unblock)
-
-        self.tabs.addTab(self.ips_tab, "RESPUESTA ACTIVA (IPS)")
-
-        # --- ESTRUCTURA INTERNA: lista de metadatos de bloqueos para countdown ---
-        # Cada entrada: {'ip': str, 'tipo': str, 'expiry': float (epoch), 'row': int}
-        self._bloqueos_data = []
-
     def toggle_ips_mode(self, enabled):
-        """Habilita/Deshabilita el modo IPS en el motor de detección."""
         if ids:
             ids.ips_activo = enabled
             estado = "ACTIVADO" if enabled else "DESACTIVADO"
-            self.status.showMessage(f"Modo IPS (Respuesta Activa) {estado}", 5000)
-            print(f"DEBUG: Modo IPS {estado}")
+            self.mostrar_mensaje("Modo IPS", f"Modo IPS {estado}", "success" if enabled else "warning")
 
     def actualizar_tabla_bloqueos_signal(self, datos_bloqueo):
-        """Slot que recibe la señal nuevo_bloqueo desde ids.py y la muestra en la tabla.
-        Formato esperado: [ip, accion, duracion, tipo_ataque, severidad]
-        Compatible con formato antiguo de 3 elementos."""
         try:
-            # Compatibilidad: soporta tanto formato viejo (3) como nuevo (5)
             if len(datos_bloqueo) >= 5:
                 ip, accion, duracion, tipo_ataque, severidad = datos_bloqueo[:5]
             elif len(datos_bloqueo) >= 3:
@@ -810,51 +603,41 @@ class IDSInterface(QWidget):
                 return
 
             hora = time.strftime("%H:%M:%S")
-            accion_texto = "Bloqueo automatico"
+            accion_texto = "Bloqueo automático"
             estado = "Activo"
-            expiry_epoch = time.time() + (duracion * 60)  # Epoch de expiración
+            expiry_epoch = time.time() + (duracion * 60)
 
-            # Colores por severidad para la tabla
             colores_sev = {
                 "CRITICA": "#ff3b30", "ALTA": "#ff9500",
                 "MEDIA": "#ffd60a", "BAJA": "#0a84ff"
             }
             color_sev = colores_sev.get(severidad, "#ff9500")
 
-            # Inserta nueva fila en la tabla
             row = self.table_bloqueos.rowCount()
             self.table_bloqueos.insertRow(row)
 
-            # Valores de cada columna
             valores = [hora, ip, tipo_ataque, severidad, accion_texto, estado, f"{duracion}:00"]
 
             for col, val in enumerate(valores):
                 item = QTableWidgetItem(str(val))
-                item.setForeground(QBrush(QColor("#e0e0e0")))
-                # Columna Severidad: color según nivel
                 if col == 3:
                     item.setForeground(QBrush(QColor(color_sev)))
-                # Columna Estado: verde para Activo
                 if col == 5:
                     item.setForeground(QBrush(QColor("#4CAF50")))
                 self.table_bloqueos.setItem(row, col, item)
 
-            # Guarda metadatos para el countdown
             self._bloqueos_data.append({
                 'ip': ip, 'tipo': tipo_ataque, 'expiry': expiry_epoch,
                 'row': row, 'estado': 'Activo'
             })
 
-            # Actualiza badges de resumen
             self._actualizar_resumen_bloqueos()
-            self.lbl_ultimo_ataque.setText(f"Ultimo ataque: {tipo_ataque}")
-
-            self.status.showMessage(f"[IPS] IP BLOQUEADA: {ip} | {tipo_ataque} | {severidad}", 5000)
+            self.lbl_ultimo_ataque.setText(f"Último ataque: {tipo_ataque}")
+            self.mostrar_mensaje("Bloqueo IPS", f"IP BLOQUEADA: {ip} | {tipo_ataque} | {severidad}", "error")
         except Exception as e:
             logging.error(f"Error actualizando tabla de bloqueos: {e}")
 
     def _tick_bloqueos_timer(self):
-        """Timer de 1 segundo: actualiza el countdown y estado de cada bloqueo activo."""
         try:
             ahora = time.time()
             cambio = False
@@ -866,7 +649,6 @@ class IDSInterface(QWidget):
 
                 restante = entry['expiry'] - ahora
                 if restante <= 0:
-                    # Bloqueo expirado: actualiza estado y color
                     entry['estado'] = 'Expirado'
                     estado_item = self.table_bloqueos.item(row, 5)
                     tiempo_item = self.table_bloqueos.item(row, 6)
@@ -878,13 +660,11 @@ class IDSInterface(QWidget):
                         tiempo_item.setForeground(QBrush(QColor("#666666")))
                     cambio = True
                 else:
-                    # Countdown activo: formato mm:ss
                     mins = int(restante // 60)
                     secs = int(restante % 60)
                     tiempo_item = self.table_bloqueos.item(row, 6)
                     if tiempo_item:
                         tiempo_item.setText(f"{mins:02d}:{secs:02d}")
-                        # Rojo parpadeante cuando queda menos de 1 minuto
                         if restante < 60:
                             tiempo_item.setForeground(QBrush(QColor("#ff3b30")))
                         else:
@@ -896,7 +676,6 @@ class IDSInterface(QWidget):
             logging.error(f"Error en tick bloqueos: {e}")
 
     def _actualizar_resumen_bloqueos(self):
-        """Recalcula y actualiza los badges de resumen del panel IPS."""
         total = len(self._bloqueos_data)
         activos = sum(1 for b in self._bloqueos_data if b['estado'] == 'Activo')
         expirados = sum(1 for b in self._bloqueos_data if b['estado'] != 'Activo')
@@ -905,20 +684,18 @@ class IDSInterface(QWidget):
         self.lbl_bloqueos_expirados.setText(f"Expirados: {expirados}")
 
     def desbloquear_ip_manual(self):
-        """Desbloquea manualmente una IP seleccionada en la tabla IPS."""
         items = self.table_bloqueos.selectedItems()
         if not items:
-            QMessageBox.information(self, "Info", "Seleccione una fila para desbloquear.")
+            self.mostrar_mensaje("Info", "Seleccione una fila para desbloquear.", "info")
             return
 
         row = items[0].row()
-        ip_item = self.table_bloqueos.item(row, 1)  # Columna 1 = IP Bloqueada
+        ip_item = self.table_bloqueos.item(row, 1)
         if not ip_item:
             return
         ip = ip_item.text()
 
         if respuesta_activa and respuesta_activa.desbloquear_ip(ip):
-            # Actualiza estado visual en vez de eliminar la fila (mantiene historial)
             estado_item = self.table_bloqueos.item(row, 5)
             tiempo_item = self.table_bloqueos.item(row, 6)
             if estado_item:
@@ -926,68 +703,103 @@ class IDSInterface(QWidget):
                 estado_item.setForeground(QBrush(QColor("#0a84ff")))
             if tiempo_item:
                 tiempo_item.setText("—")
-            # Actualiza metadatos internos
             for entry in self._bloqueos_data:
                 if entry['row'] == row:
                     entry['estado'] = 'Desbloqueado'
             self._actualizar_resumen_bloqueos()
-            self.status.showMessage(f"[OK] IP Desbloqueada manualmente: {ip}", 5000)
+            self.mostrar_mensaje("Desbloqueo IPS", f"IP Desbloqueada manualmente: {ip}", "success")
         else:
-            QMessageBox.warning(self, "Error", f"No se pudo desbloquear la IP {ip}")
+            self.mostrar_mensaje("Error", f"No se pudo desbloquear la IP {ip}", "error")
+
+    def bloquear_ip_manual_ui(self):
+        ip = self.input_manual_ip.text().strip()
+        minutos = self.spin_manual_time.value()
+        
+        if not ip or not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+            self.mostrar_mensaje("Error de Validación", "Ingrese una dirección IPv4 válida.", "warning")
+            return
+            
+        if respuesta_activa and respuesta_activa.bloquear_ip(ip, minutos):
+            self.actualizar_tabla_bloqueos_signal([ip, "Bloqueo manual", minutos, "Prevención Manual", "ALTA"])
+            self.input_manual_ip.clear()
+            self.mostrar_mensaje("Bloqueo IPS", f"IP {ip} bloqueada manualmente por {minutos} minutos.", "success")
+        else:
+            self.mostrar_mensaje("Error", f"No se pudo ejecutar la regla de bloqueo para {ip}.", "error")
+            
+    def limpiar_ips_expirados(self):
+        rows_to_remove = []
+        for i in reversed(range(self.table_bloqueos.rowCount())):
+            estado_item = self.table_bloqueos.item(i, 5)
+            if estado_item and estado_item.text() in ["Expirado", "Desbloqueado"]:
+                rows_to_remove.append(i)
+                
+        for row in rows_to_remove:
+            self.table_bloqueos.removeRow(row)
+            
+        self._bloqueos_data = [b for b in self._bloqueos_data if b['estado'] == 'Activo']
+        
+        for i in range(self.table_bloqueos.rowCount()):
+            ip = self.table_bloqueos.item(i, 1).text()
+            for b in self._bloqueos_data:
+                if b['ip'] == ip and b['estado'] == 'Activo':
+                    b['row'] = i
+                    
+        self._actualizar_resumen_bloqueos()
+        self.mostrar_mensaje("IPS", "Historial de bloqueos inactivos limpiado.", "info")
+
+    def exportar_reglas_ips(self):
+        ruta, _ = QFileDialog.getSaveFileName(self, "Exportar Reglas IPS", "reglas_ips_activas.csv", "CSV Files (*.csv)")
+        if not ruta: return
+        try:
+            with open(ruta, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Hora", "IP Bloqueada", "Tipo de Ataque", "Severidad", "Acción Aplicada", "Estado", "Tiempo Restante"])
+                for i in range(self.table_bloqueos.rowCount()):
+                    row_data = [self.table_bloqueos.item(i, col).text() for col in range(7)]
+                    writer.writerow(row_data)
+            self.mostrar_mensaje("Exportación", f"Reglas IPS exportadas a {ruta}", "success")
+        except Exception as e:
+            logging.error(f"Error exportando reglas IPS: {e}")
 
     def actualizar_trafico_batch(self):
-        """Actualiza el panel de tráfico con los últimos 20 mensajes del buffer."""
         if not trafico_buffer:
             return
         mensajes = list(trafico_buffer)[-20:]
         self.trafico_en_vivo.setPlainText('\n'.join(mensajes))
         if self.auto_scroll_enabled:
-            # scrollToBottom: Mueve el scroll al final para ver los eventos más recientes
             self.trafico_en_vivo.verticalScrollBar().setValue(
                 self.trafico_en_vivo.verticalScrollBar().maximum()
             )
 
     def process_event_batch(self, events):
-        """Callback del DataProcessor — activa actualización de tabla con debounce."""
         if not self.update_pending:
             self.update_pending = True
-            # singleShot(100ms): Retrasa la actualización para agrupar múltiples eventos
             QTimer.singleShot(100, self.actualizar_tabla_optimizada)
 
     def update_stats(self, stats):
-        """Muestra estadísticas globales en la barra de estado."""
-        self.status.showMessage(
-            f"Eventos: {stats['total_eventos']} | IPs únicas: {stats['ips_unicas']}"
-        )
+        self.lbl_stats.setText(f"Eventos: {stats['total_eventos']} | IPs únicas: {stats['ips_unicas']}")
 
     def _hash_muestra_eventos(self, eventos):
-        """
-        Hash ligero sobre las últimas 50 filas para detectar cambios de contenido.
-        Evita redibujar la tabla si los datos no han cambiado.
-        """
         muestra = eventos[-50:] if len(eventos) > 50 else eventos
         try:
             key = tuple(tuple(ev) for ev in muestra)
             return hash(key)
         except Exception:
-            # Fallback si los elementos no son hasheables
             return hash(tuple(sorted(Counter([e[6] for e in muestra]).items())))
 
     def _compute_severity(self, tipo_texto: str):
-        """Mapea tipo de ataque a nivel de severidad SOC con color asociado."""
         t = (tipo_texto or "").lower()
         if "posible exploit" in t or "exploit" in t:
-            return "CRÍTICA", "#ff3b30"   # Rojo: máxima urgencia
+            return "CRÍTICA", "#E81123" if not self.modo_oscuro else "#FF99A4"
         if "ddos" in t or "syn flood" in t or "udp flood" in t:
-            return "ALTA",    "#ff9500"   # Naranja: requiere atención inmediata
+            return "ALTA",    "#D83B01" if not self.modo_oscuro else "#FFB38F"
         if "escaneo" in t or "port" in t or "scan" in t:
-            return "MEDIA",   "#ffd60a"   # Amarillo: reconocimiento
+            return "MEDIA",   "#D83B01" if not self.modo_oscuro else "#FFB38F"
         if "sql injection" in t or "sqli" in t:
-            return "ALTA",    "#ff9500"   # Naranja: compromiso potencial de datos
-        return "BAJA",    "#0a84ff"       # Azul: informativo
+            return "ALTA",    "#D83B01" if not self.modo_oscuro else "#FFB38F"
+        return "BAJA",    "#0078D4" if not self.modo_oscuro else "#6CB8F6"
 
     def _row_matches_filters(self, row_values):
-        """Retorna True si una fila cumple los filtros activos de severidad y búsqueda."""
         sev_filter = self.sev_filter.currentText() if hasattr(self, "sev_filter") else "Todos"
         if sev_filter != "Todos" and row_values.get("sev") != sev_filter:
             return False
@@ -996,15 +808,12 @@ class IDSInterface(QWidget):
         if not q:
             return True
 
-        # Concatena todos los valores de la fila en un string para búsqueda global
         haystack = " ".join(str(v).lower() for v in row_values.values())
         return q in haystack
 
     def apply_filters(self):
-        """Oculta/muestra filas de la tabla según los filtros activos."""
         try:
             for r in range(self.table.rowCount()):
-                # Extrae texto de cada celda de la fila (o string vacío si es None)
                 sev    = self.table.item(r, 0).text() if self.table.item(r, 0) else ""
                 hora   = self.table.item(r, 1).text() if self.table.item(r, 1) else ""
                 ip_src = self.table.item(r, 2).text() if self.table.item(r, 2) else ""
@@ -1018,13 +827,11 @@ class IDSInterface(QWidget):
                     "sev": sev, "hora": hora, "ip_src": ip_src, "ip_dst": ip_dst,
                     "puerto": puerto, "proto": proto, "flag": flag, "tipo": tipo,
                 })
-                # setRowHidden: Oculta la fila sin eliminarla (preserva los datos)
                 self.table.setRowHidden(r, not row_ok)
         except Exception as e:
             logging.error(f"Error aplicando filtros: {e}")
 
     def listar_interfaces_captura(self):
-        """Lista interfaces de red disponibles para captura (Windows con Scapy/Npcap)."""
         ifaces = []
         try:
             from scapy.arch.windows import get_windows_if_list
@@ -1033,14 +840,12 @@ class IDSInterface(QWidget):
                 desc = (i.get("description") or "").lower()
                 ips  = i.get("ips") or []
 
-                # Filtra interfaces de captura virtuales (WFP, Npcap loopback, etc.)
                 nlow = name.lower()
                 if "-wfp" in nlow or "-npcap" in nlow or "-filter" in nlow:
                     continue
                 if "loopback" in desc or "wi-fi direct" in desc:
                     continue
 
-                # Solo incluye interfaces con IPv4 activa
                 if not any("." in ip for ip in ips):
                     continue
                 ifaces.append(name)
@@ -1048,37 +853,33 @@ class IDSInterface(QWidget):
             logging.error(f"No se pudieron listar interfaces: {e}")
 
         if not ifaces:
-            ifaces = ["Ethernet", "Wi-Fi"]  # Fallback con nombres estándar
+            ifaces = ["Ethernet", "Wi-Fi"]
 
-        # Prioriza Ethernet sobre Wi-Fi (más estable para captura)
         if "Ethernet" in ifaces:
             ifaces = ["Ethernet"] + [x for x in ifaces if x != "Ethernet"]
 
         return ifaces
 
     def _set_running_state(self, running: bool):
-        """Actualiza el badge de interfaz con el estado actual del monitoreo."""
         iface  = self.combo_iface.currentText() if hasattr(self, "combo_iface") else "N/A"
         estado = "● Running" if running else "○ Stopped"
         self.iface_badge.setText(f"Interfaz: {iface} | {estado}")
 
     def _tick_pps(self):
-        """Actualiza el label PPS con el contador del último segundo y lo resetea."""
         try:
             pps = getattr(self, "_pps_count", 0)
+            self.history_pps.append(pps)
             self.lbl_pps.setText(f"PPS: {pps}")
-            self._pps_count = 0  # Reset para el siguiente segundo
+            self._pps_count = 0
         except Exception as e:
             logging.error(f"Error PPS tick: {e}")
 
     def _tick_uptime(self):
-        """Calcula y muestra el tiempo transcurrido desde que inició el monitoreo."""
         try:
             if not getattr(self, "_start_time", None):
                 self.lbl_uptime.setText("Uptime: 00:00:00")
                 return
             delta = int(time.time() - self._start_time)
-            # Desglose en horas, minutos y segundos con formato HH:MM:SS
             h = delta // 3600
             m = (delta % 3600) // 60
             s = delta % 60
@@ -1087,26 +888,25 @@ class IDSInterface(QWidget):
             logging.error(f"Error uptime tick: {e}")
 
     def _tick_alerts_per_min(self):
-        """Cuenta alertas en la ventana del último minuto (60 segundos)."""
         try:
             dq    = getattr(self, "_alert_ts", None)
             ahora = time.time()
-            # Descarta timestamps más viejos de 60 segundos (ventana deslizante)
             while dq and (ahora - dq[0]) > 60:
                 dq.popleft()
-            self.lbl_alerts_min.setText(f"Alertas/min: {len(dq)}")
+            alertas = len(dq)
+            self.history_alerts.append(alertas)
+            self.lbl_alerts_min.setText(f"Alertas/min: {alertas}")
         except Exception as e:
             logging.error(f"Error alert/min tick: {e}")
 
     def update_detail_panel(self):
-        """Muestra información detallada del evento seleccionado en la tabla."""
         try:
             items = self.table.selectedItems()
             if not items:
-                self.detalle_text.setPlainText("Seleccione una alerta para ver el detalle.")
+                self.detalle_text.setPlainText("Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.")
                 return
 
-            row   = items[0].row()  # Índice de la fila seleccionada
+            row   = items[0].row()
             sev   = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
             hora  = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
             ip_src = self.table.item(row, 2).text() if self.table.item(row, 2) else ""
@@ -1116,29 +916,26 @@ class IDSInterface(QWidget):
             flag   = self.table.item(row, 6).text() if self.table.item(row, 6) else ""
             tipo   = self.table.item(row, 7).text() if self.table.item(row, 7) else ""
 
-            # Genera evidencia contextual según el tipo de ataque detectado
             evidencia = [f"- Protocolo/Flag: {proto}/{flag}"]
             if "syn flood"   in tipo.lower(): evidencia.append("- Indicador: volumen alto de SYN en ventana corta")
             if "ddos"        in tipo.lower(): evidencia.append("- Indicador: volumen alto hacia destino (posible DDoS)")
             if "escaneo"     in tipo.lower(): evidencia.append("- Indicador: múltiples puertos probados desde una misma IP")
             if "sql"         in tipo.lower(): evidencia.append("- Indicador: patrón de payload compatible con SQLi")
 
-            # Formato de reporte SOC estructurado para análisis e incidentes
             txt = (
                 f"SEVERIDAD: {sev}\nHORA: {hora}\nTIPO: {tipo}\n"
                 f"IP ORIGEN: {ip_src}\nIP DESTINO: {ip_dst}\nPUERTO: {puerto}\n\n"
                 f"EVIDENCIA (resumen):\n" + "\n".join(evidencia) + "\n\n"
                 f"ACCIONES SUGERIDAS:\n"
-                f"- llamar al profesor Jhoni si la alarma persiste\n"
-                f"- Revisar logs del servicio en puerto destino\n"
-                f"- Bloquear/limitar si es recurrente\n"
+                f"- Llamar al profesor Jhoni si la alarma persiste\n"
+                f"- Revisar logs del servicio en el puerto destino\n"
+                f"- Bloquear/limitar tráfico desde la interfaz de IPS si es recurrente\n"
             )
             self.detalle_text.setPlainText(txt)
         except Exception as e:
             logging.error(f"Error actualizando detalle: {e}")
 
     def actualizar_tabla_optimizada(self):
-        """Refresca la tabla con los eventos más recientes aplicando hash diff."""
         self.update_pending = False
         try:
             with data_lock:
@@ -1151,19 +948,13 @@ class IDSInterface(QWidget):
 
             self.table.setRowCount(len(eventos_a_mostrar))
 
-            # Hash diff: solo redibuja si el contenido de las últimas 50 filas cambió
             nuevo_hash = self._hash_muestra_eventos(eventos_a_mostrar)
             contenido_cambio = (getattr(self, "_last_cnt_hash", None) != nuevo_hash)
             self._last_cnt_hash = nuevo_hash
 
-            # setUpdatesEnabled(False): Suspende el redibujado durante la actualización
-            # Evita parpadeos y mejora significativamente el rendimiento
             self.table.setUpdatesEnabled(False)
             try:
                 if contenido_cambio:
-                    bg_color = "#000000"
-                    fg_color = "#ab0df5" if self.modo_oscuro else "#ffffff"
-
                     for i, ev in enumerate(eventos_a_mostrar):
                         try:
                             hora, ip_src, ip_dst, puerto, protocolo, flag, tipo = ev
@@ -1181,19 +972,16 @@ class IDSInterface(QWidget):
                                 self.table.setItem(i, j, it)
 
                             it.setText(str(v))
-                            it.setBackground(QBrush(QColor(bg_color)))
 
                             if j == 0:
-                                # Columna Severidad: color según nivel de criticidad
                                 it.setForeground(QBrush(QColor(sev_color)))
                             elif j == 7:
-                                # Columna Tipo: color del ATTACK_STYLE si existe
-                                st = ATTACK_STYLE.get(tipo, {})
-                                it.setForeground(QBrush(QColor(st.get("color", "#f54f13"))))
+                                color_val = "#0078D4" if not self.modo_oscuro else "#6CB8F6"
+                                it.setForeground(QBrush(QColor(color_val)))
                             else:
-                                it.setForeground(QBrush(QColor(fg_color)))
+                                it.setData(Qt.ForegroundRole, None)
             finally:
-                self.table.setUpdatesEnabled(True)  # Reactiva el redibujado siempre
+                self.table.setUpdatesEnabled(True)
 
             self.apply_filters()
 
@@ -1206,10 +994,8 @@ class IDSInterface(QWidget):
             logging.error(f"Error actualizando tabla optimizada: {e}")
 
     def actualizar_advertencias_optimizada(self):
-        """Reconstruye el panel de advertencias con las Top 100 IPs más activas."""
         try:
             with data_lock:
-                # sorted + reverse=True: IPs con más advertencias primero
                 items_sorted = sorted(advertencias_cont.items(), key=lambda x: x[1], reverse=True)[:100]
             texto = '\n'.join(f"[!] -> {ip}: {cnt} advertencia(s)" for ip, cnt in items_sorted)
             self.advertencias.setPlainText(texto)
@@ -1230,76 +1016,48 @@ class IDSInterface(QWidget):
         self._apply_table_proportions()
 
     def cambiar_tema(self):
-        """Alterna entre modo oscuro y claro actualizando estilos, tabla y gráficos."""
         self.modo_oscuro = not self.modo_oscuro
-        self.boton_tema.setText("Modo Claro" if self.modo_oscuro else "Modo Oscuro")
-        self.aplicar_tema()
+        tema = Theme.DARK if self.modo_oscuro else Theme.LIGHT
+        setTheme(tema)
+        self.aplicar_estilos_badges()
         self.actualizar_tabla_optimizada()
         self.actualizar_grafico_auto()
-        self.status.showMessage(
-            f"Tema cambiado a modo {'oscuro' if self.modo_oscuro else 'claro'}", 3000
-        )
-
-    def aplicar_tema(self):
-        """Aplica el stylesheet correspondiente al modo actual."""
-        imagen_fondo = os.path.join(BASE_DIR, 'aed04dd0-dcaa-4ac2-8c8f-3bfca505b67f.png')
-        if self.modo_oscuro:
-            if os.path.exists(imagen_fondo):
-                imagen_fondo_qt = imagen_fondo.replace("\\", "/")
-                self.setStyleSheet(
-                    self.estilo_moderno() + f"""
-                    #mainWindow {{ background-image: url('{imagen_fondo_qt}'); background-repeat: no-repeat; background-position: center; }}
-                    """
-                )
-            else:
-                self.setStyleSheet(self.estilo_moderno())
-        else:
-            self.setStyleSheet(self.estilo_claro())
+        self.mostrar_mensaje("Apariencia", f"Tema cambiado a modo {'oscuro' if self.modo_oscuro else 'claro'}", "info")
 
     def iniciar_monitoreo(self):
-        """Arranca el monitoreo: habilita sniffer, timers y botones."""
         self.boton_iniciar.setEnabled(False)
         self.boton_detener.setEnabled(True)
         self.monitoreo_activo = True
         if hasattr(self, "combo_iface"):
-            self.combo_iface.setEnabled(False)  # Bloquea cambio de interfaz mientras monitorea
+            self.combo_iface.setEnabled(False)
 
-        # Reset de métricas SOC al inicio de cada sesión
         self._pps_count  = 0
         self._alert_ts.clear()
-        self._start_time = time.time()  # Marca el inicio para el uptime
+        self._start_time = time.time()
 
         iface = self.combo_iface.currentText() if hasattr(self, "combo_iface") else None
 
         if ids and hasattr(ids, 'iniciar_monitoreo'):
             try:
-                # Advertencia para interfaces virtuales o de solo host
                 iface_lower = iface.lower()
                 if "virtualbox" in iface_lower or "host-only" in iface_lower or "local*" in iface_lower:
-                    QMessageBox.warning(
-                        self, "Advertencia de Interfaz",
-                        f"La interfaz seleccionada ({iface}) parece ser una red virtual o de solo host.\n\n"
-                        "Es probable que NO detecte tráfico de internet. Si no ve actividad, "
-                        "intente seleccionar su interfaz física (ej: Wi-Fi o Ethernet)."
+                    self.mostrar_mensaje(
+                        "Advertencia de Interfaz",
+                        f"La interfaz {iface} parece ser una red virtual. Puede no detectar tráfico de internet.",
+                        "warning"
                     )
-                
-                ids.iniciar_monitoreo(iface)  # Inicia el AsyncSniffer con la interfaz elegida
+                ids.iniciar_monitoreo(iface)
             except Exception as e:
                 logging.error(f"Error al iniciar monitoreo en 'ids': {e}")
 
         self._set_running_state(True)
-
-        # Tiempos conservadores para no saturar la UI durante captura activa
-        self.timer.start(3000)        # Tabla: cada 3 segundos
-        self.graf_timer.start(10000)  # Gráfico: cada 10 segundos
-
-        # Métricas SOC: actualizaciones más frecuentes
+        self.timer.start(3000)
+        self.graf_timer.start(10000)
         self.pps_timer.start(1000)
         self.uptime_timer.start(1000)
         self.alerts_timer.start(5000)
 
     def detener_monitoreo(self):
-        """Detiene el monitoreo: para sniffer y todos los timers."""
         self.monitoreo_activo = False
 
         if ids and hasattr(ids, 'detener_monitoreo'):
@@ -1308,142 +1066,129 @@ class IDSInterface(QWidget):
             except Exception as e:
                 logging.error(f"Error al detener monitoreo en 'ids': {e}")
 
-        # Detiene todos los timers de actualización
         for timer in [self.timer, self.graf_timer, self.pps_timer,
                       self.uptime_timer, self.alerts_timer]:
             timer.stop()
 
         if hasattr(self, "combo_iface"):
-            self.combo_iface.setEnabled(True)  # Permite cambiar interfaz nuevamente
+            self.combo_iface.setEnabled(True)
 
         self._set_running_state(False)
         self.boton_iniciar.setEnabled(True)
         self.boton_detener.setEnabled(False)
 
     def limpiar_tabla(self):
-        """Borra todos los datos de memoria y limpia los widgets visuales."""
         with data_lock:
             eventos_detectados.clear()
             advertencias_cont.clear()
             trafico_buffer.clear()
 
-        self.table.setRowCount(0)  # Elimina todas las filas de la tabla
+        self.table.setRowCount(0)
         self.advertencias.clear()
         self.trafico_en_vivo.clear()
-        self.axes_pie.clear()
-        self.canvas_pie.draw()  # Fuerza redibujado del canvas de Matplotlib
-        self.status.showMessage("Interfaz limpia", 3000)
+        self.history_pps.clear()
+        self.history_pps.extend([0]*60)
+        
+        self.ax_pie.clear()
+        self.ax_bar.clear()
+        self.ax_line.clear()
+        self.canvas_stats.draw()
+        
+        self.mostrar_mensaje("Limpieza", "Interfaz y registros en memoria limpiados", "info")
 
     def actualizar_grafico_auto(self):
-        """Actualiza el gráfico de distribución de ataques con los últimos 500 eventos."""
         if self.graph_update_pending:
-            return  # Evita actualización concurrente si ya hay una en progreso
+            return
 
         self.graph_update_pending = True
         try:
             with data_lock:
-                if not eventos_detectados:
-                    return
-                eventos_muestra = list(eventos_detectados)[-500:]
+                eventos_muestra = list(eventos_detectados)[-500:] if eventos_detectados else []
+                top_ips = sorted(advertencias_cont.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            bg_color   = "#272727" if self.modo_oscuro else "#ffffff"
+            text_color = "#ffffff" if self.modo_oscuro else "#201f1e"
+            grid_color = "#3e3e42" if self.modo_oscuro else "#e1dfdd"
+            accent_color = "#4daafc" if self.modo_oscuro else "#0078d4"
 
-            # Counter sobre índice 6 (tipo_ataque) para distribución de categorías
-            cnt = Counter([e[6] for e in eventos_muestra])
-            if not cnt:
-                return
+            self.fig_stats.patch.set_facecolor(bg_color)
 
-            labels = list(cnt.keys())
-            values = list(cnt.values())
-            colors = colors_for_labels(labels)  # Un color por tipo de ataque
+            # 1. Pie Chart
+            self.ax_pie.clear()
+            self.ax_pie.set_facecolor(bg_color)
+            if eventos_muestra:
+                cnt = Counter([e[6] for e in eventos_muestra])
+                if cnt:
+                    labels = list(cnt.keys())
+                    values = list(cnt.values())
+                    colors = colors_for_labels(labels)
+                    self.ax_pie.pie(
+                        values, labels=labels, colors=colors,
+                        autopct='%1.1f%%',
+                        textprops={'color': text_color, 'fontsize': 9, 'weight': 'bold'}
+                    )
+            self.ax_pie.set_title("Distribución de Amenazas", color=text_color, fontsize=11, pad=15, weight='bold')
+            
+            # 2. Bar Chart
+            self.ax_bar.clear()
+            self.ax_bar.set_facecolor(bg_color)
+            if top_ips:
+                ips = [x[0] for x in top_ips]
+                counts = [x[1] for x in top_ips]
+                bar_colors = [accent_color] * len(ips)
+                self.ax_bar.bar(ips, counts, color=bar_colors, edgecolor=bg_color, linewidth=1)
+                self.ax_bar.tick_params(axis='x', rotation=15, colors=text_color, labelsize=9)
+                self.ax_bar.tick_params(axis='y', colors=text_color, labelsize=9)
+                for spine in self.ax_bar.spines.values():
+                    spine.set_edgecolor(grid_color)
+            self.ax_bar.set_title("Top 5 IPs Atacantes", color=text_color, fontsize=11, pad=15, weight='bold')
+            self.ax_bar.grid(True, axis='y', linestyle='--', alpha=0.4, color=grid_color)
 
-            bg_color   = "#121212" if self.modo_oscuro else "#FFFFFF"
-            text_color = "#ffffff" if self.modo_oscuro else "#000000"
+            # 3. Line Chart
+            self.ax_line.clear()
+            self.ax_line.set_facecolor(bg_color)
+            x_data = list(range(len(self.history_pps)))
+            self.ax_line.plot(x_data, list(self.history_pps), color=accent_color, linewidth=2.5, marker='o', markersize=4, label="Paquetes / Seg")
+            self.ax_line.fill_between(x_data, list(self.history_pps), color=accent_color, alpha=0.15)
+            self.ax_line.set_title("Carga de Red en Tiempo Real (Últimos 60s)", color=text_color, fontsize=11, pad=15, weight='bold')
+            self.ax_line.tick_params(axis='both', colors=text_color, labelsize=9)
+            for spine in self.ax_line.spines.values():
+                spine.set_edgecolor(grid_color)
+            self.ax_line.grid(True, linestyle='--', alpha=0.4, color=grid_color)
+            self.ax_line.set_xlim(0, max(1, len(x_data) - 1))
+            self.ax_line.set_ylim(bottom=0)
 
-            # Dibuja gráfico de torta con etiquetas y porcentajes
-            self.axes_pie.clear()
-            self.axes_pie.pie(
-                values, labels=labels, colors=colors,
-                autopct='%1.1f%%',  # Formato de porcentaje con 1 decimal
-                textprops={'color': text_color, 'fontsize': 8}
-            )
-            self.axes_pie.set_title("Distribución de Ataques", color=text_color, fontsize=10)
-            self.axes_pie.axis('equal')  # Asegura que el pastel sea circular
-            self.axes_pie.set_facecolor(bg_color)
-            self.canvas_pie.figure.patch.set_facecolor(bg_color)
-            self.canvas_pie.figure.tight_layout()
-            self.canvas_pie.draw_idle()  # draw_idle: solo redibuja si el canvas está visible
+            self.fig_stats.tight_layout(pad=4.0)
+            self.canvas_stats.draw_idle()
 
         except Exception as e:
-            logging.error(f"Error actualizando gráfico: {e}")
+            logging.error(f"Error actualizando gráficos avanzados: {e}")
         finally:
-            self.graph_update_pending = False  # Siempre libera el flag
+            self.graph_update_pending = False
 
     def _apply_table_proportions(self):
-        """Ajusta anchos de columna proporcionales al ancho visible de la tabla."""
         if not hasattr(self, "table"):
             return
 
         total = max(200, self.table.viewport().width())
-
-        # Proporciones relativas al ancho total (suman ~1.0):
-        # Sev=8%, Hora=12%, IP Origen=16%, IP Destino=16%, Puerto=8%, Proto=10%, Flag=8%, Tipo=22%
         ratios = [0.08, 0.12, 0.16, 0.16, 0.08, 0.10, 0.08, 0.22]
-        mins   = [60,   80,   120,  120,  60,   80,   60,  200]  # Mínimos por columna
+        mins   = [60,   80,   120,  120,  60,   80,   60,  200]
 
         self.table.setUpdatesEnabled(False)
         try:
             for i, r in enumerate(ratios):
                 w = max(mins[i], int(total * r))
-                # Solo aplica si el cambio supera 2px — evita parpadeo por cambios mínimos
                 if abs(self.table.columnWidth(i) - w) > 2:
                     self.table.setColumnWidth(i, w)
         finally:
             self.table.setUpdatesEnabled(True)
 
     def resizeEvent(self, event):
-        """Sobrescribe el evento de resize para aplicar debounce de 60ms."""
         if hasattr(self, "_resize_timer"):
-            self._resize_timer.start(60)  # Reinicia el timer en cada resize
+            self._resize_timer.start(60)
         super().resizeEvent(event)
 
-    def estilo_moderno(self):
-        """Retorna el stylesheet QSS para el modo oscuro de la interfaz."""
-        return """
-        QWidget { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI'; }
-        QGroupBox#warnBox { border: 1px solid #ffab40; border-radius: 4px; margin-top: 8px; background-color: #1a1a1a; }
-        QGroupBox#warnBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 5px; color: #ffeb3b; font-size: 10px; font-weight: bold; }
-        QPlainTextEdit#warnText { background: transparent; border: none; color: #ffffff; font-size: 10px; padding: 4px; }
-        QGroupBox#trafficBox { border: 1px solid #00eaff; border-radius: 4px; margin-top: 8px; background-color: #1a1a1a; }
-        QGroupBox#trafficBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 5px; color: #00eaff; font-size: 12px; font-weight: bold; }
-        QPlainTextEdit#trafficText { background: transparent; border: none; color: #ffffff; padding: 4px; }
-        QLabel { font-weight: bold; color: #03dac6; font-size: 12px; margin: 2px; }
-        QPushButton { background-color: #292929; color: #ffffff; border: 1px solid #03dac6; border-radius: 4px; padding: 6px 10px; font-weight: bold; font-size: 10px; }
-        QPushButton:hover { background-color: #03dac6; color: #121212; }
-        QTableWidget { background-color: #000; border: none; gridline-color: #333; alternate-background-color: #111; }
-        QHeaderView::section { background-color: #2a2a2a; color: #fff; padding: 6px; border: 1px solid #444; font-size: 10px; }
-        """
-
-    def estilo_claro(self):
-        """Retorna el stylesheet QSS para el modo claro de la interfaz."""
-        return """
-        QWidget { background-color: #E0E0E0; color: #000000; font-family: 'Segoe UI'; }
-        QGroupBox#warnBox { border: 1px solid #FF0000; border-radius: 4px; margin-top: 8px; background-color: #ffffff; }
-        QGroupBox#warnBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 5px; color: #FF0000; font-size: 10px; font-weight: bold; }
-        QLabel { font-weight: bold; color: #0093FF; font-size: 12px; margin: 2px; }
-        QPushButton { background-color: #ffffff; color: #212121; border: 1px solid #0093FF; border-radius: 4px; padding: 6px 10px; font-weight: bold; font-size: 10px; }
-        QPushButton:hover { background-color: #0093FF; color: #ffffff; }
-        QTableWidget { background-color: #ffffff; border: none; gridline-color: #e0e0e0; alternate-background-color: #fafafa; }
-        QHeaderView::section { background-color: #e0e0e0; color: #212121; padding: 6px; border: 1px solid #bdbdbd; font-size: 10px; font-weight: bold; }
-        """
-
-    def crear_boton(self, texto, funcion, habil=True):
-        """Factory de botones: crea QPushButton y conecta el slot en una línea."""
-        boton = QPushButton(texto)
-        boton.clicked.connect(funcion)
-        boton.setEnabled(habil)
-        return boton
-
     def exportar_csv(self):
-        """Exporta todos los eventos actuales a un archivo CSV elegido por el usuario."""
         with data_lock:
             if not eventos_detectados:
                 return
@@ -1457,13 +1202,12 @@ class IDSInterface(QWidget):
                 with open(ruta, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.writer(f)
                     writer.writerow(["Hora", "IP Origen", "IP Destino", "Puerto", "Protocolo", "Flag", "Tipo"])
-                    writer.writerows(eventos_copia)  # writerows: escribe todas las filas de una vez
-                self.status.showMessage(f"CSV guardado: {ruta}", 5000)
+                    writer.writerows(eventos_copia)
+                self.mostrar_mensaje("Exportación", f"CSV guardado: {ruta}", "success")
             except Exception as e:
                 logging.error(f"Error exportando CSV: {e}")
 
     def generar_evidencia(self):
-        """Guarda el gráfico de pastel como imagen PNG en la carpeta 'evidencia'."""
         try:
             carpeta = os.path.join(BASE_DIR, 'evidencia')
             if not os.path.exists(carpeta):
@@ -1471,30 +1215,26 @@ class IDSInterface(QWidget):
 
             timestamp  = datetime.now().strftime('%Y%m%d_%H%M%S')
             ruta_pie   = os.path.join(carpeta, f"grafico_pie_{timestamp}.png")
-            # savefig: Guarda la figura en disco con 100 DPI, ajustando al contenido
-            self.canvas_pie.figure.savefig(ruta_pie, dpi=100, bbox_inches='tight')
-            self.status.showMessage(f"Evidencia generada en {carpeta}", 5000)
+            self.canvas_stats.figure.savefig(ruta_pie, dpi=100, bbox_inches='tight')
+            self.mostrar_mensaje("Evidencia", f"Evidencia generada en {carpeta}", "success")
         except Exception as e:
             logging.error(f"Error generando evidencia: {e}")
 
     def guardar_grafico_pie_diario(self):
-        """Guardado automático diario del gráfico de pastel."""
         try:
             carpeta = os.path.join(BASE_DIR, 'evidencia')
             if not os.path.exists(carpeta):
                 os.makedirs(carpeta)
             nombre  = f"grafica_pie_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            self.canvas_pie.figure.savefig(os.path.join(carpeta, nombre), dpi=100, bbox_inches='tight')
-            self.status.showMessage(f"Gráfica (pie) guardada: {nombre}", 5000)
+            self.canvas_stats.figure.savefig(os.path.join(carpeta, nombre), dpi=100, bbox_inches='tight')
+            self.mostrar_mensaje("Backup", f"Gráfica (pie) guardada: {nombre}", "info")
         except Exception as e:
             logging.error(f"Error guardando gráfica diaria: {e}")
 
     def guardar_csv_diario(self):
-        """Guardado automático diario del dataset de eventos en CSV."""
         try:
             with data_lock:
                 if not eventos_detectados:
-                    self.status.showMessage("No hay eventos para guardar.", 3000)
                     return
                 eventos_copia = list(eventos_detectados)
 
@@ -1506,32 +1246,27 @@ class IDSInterface(QWidget):
             with open(os.path.join(carpeta, nombre), 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(["Hora", "IP Origen", "IP Destino", "Puerto", "Protocolo", "Flag", "Tipo"])
-
-                # Escritura en chunks de 1000: eficiente para archivos grandes (>100k filas)
                 chunk_size = 1000
                 for i in range(0, len(eventos_copia), chunk_size):
                     writer.writerows(eventos_copia[i:i + chunk_size])
 
-            self.status.showMessage(f"CSV guardado: {nombre}", 5000)
+            self.mostrar_mensaje("Backup", f"CSV guardado: {nombre}", "info")
         except Exception as e:
             logging.error(f"Error guardando CSV diario: {e}")
 
     def closeEvent(self, event):
-        """Sobrescribe el evento de cierre para limpieza ordenada de recursos."""
         try:
-            self.gestor_abuse.limpiar()  # Cancela requests pendientes de AbuseIPDB
+            self.gestor_abuse.limpiar()
 
             if self.monitoreo_activo:
-                self.detener_monitoreo()  # Para el AsyncSniffer limpiamente
+                self.detener_monitoreo()
 
-            # Detiene todos los timers para evitar callbacks tras cierre
             for t in [self.timer, self.graf_timer,
                       self.timer_guardar_diario, self.timer_guardar_csv_diario]:
                 t.stop()
 
-            self.data_processor.stop()  # Espera a que el QThread termine su ciclo
+            self.data_processor.stop()
 
-            # Libera memoria de las estructuras globales
             with data_lock:
                 eventos_detectados.clear()
                 advertencias_cont.clear()
@@ -1540,53 +1275,122 @@ class IDSInterface(QWidget):
         except Exception as e:
             logging.error(f"Error en closeEvent: {e}")
         finally:
-            super().closeEvent(event)  # Siempre llama al closeEvent del padre
+            super().closeEvent(event)
 
+    def _es_ip_externa(self, ip):
+        ip_limpia = str(ip).strip()
+        if not ip_limpia:
+            return False
 
-# =============================================================================
-# FUNCIONES AUXILIARES GLOBALES
-# =============================================================================
+        partes = ip_limpia.split('.')
+        if len(partes) != 4:
+            return False
+
+        try:
+            octeto1 = int(partes[0])
+            octeto2 = int(partes[1])
+
+            if octeto1 == 10: return False
+            if octeto1 == 172 and 16 <= octeto2 <= 31: return False
+            if octeto1 == 192 and octeto2 == 168: return False
+            if octeto1 == 127 or octeto1 == 0 or octeto1 >= 224: return False
+            return True
+        except:
+            return False
+
+    def verificar_ips_abuse(self):
+        ips_encontradas = set()
+
+        try:
+            texto_adv = self.advertencias.toPlainText()
+            if texto_adv:
+                patron_ip = r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
+                for ip in re.findall(patron_ip, texto_adv):
+                    if self._es_ip_externa(ip):
+                        ips_encontradas.add(ip)
+        except Exception as e:
+            logging.error(f"Error extrayendo IPs del warnbox: {e}")
+
+        if not ips_encontradas and hasattr(self, "table"):
+            try:
+                for fila in range(self.table.rowCount()):
+                    for col in (1, 2):
+                        item = self.table.item(fila, col)
+                        if item and item.text().strip():
+                            ip = item.text().strip()
+                            if self._es_ip_externa(ip):
+                                ips_encontradas.add(ip)
+            except Exception as e:
+                logging.error(f"Error extrayendo IPs de la tabla: {e}")
+
+        if not ips_encontradas and self.ips_a_verificar_cola:
+            ips_encontradas = set(self.ips_a_verificar_cola)
+
+        if not ips_encontradas:
+            self.mostrar_mensaje("Verificación", "No se encontraron IPs externas para verificar", "warning")
+            self.ips_a_verificar_cola.clear()
+            return
+
+        ips_lista = list(ips_encontradas)
+        self.mostrar_mensaje("AbuseIPDB", f"Verificando {len(ips_lista)} IPs en AbuseIPDB...", "info")
+
+        self.gestor_abuse.verificar_ips(
+            ips_lista,
+            callback_resultado=self.mostrar_resultado_abuse,
+            callback_error=self.mostrar_error_abuse
+        )
+
+    def mostrar_resultado_abuse(self, resultado):
+        ip      = resultado['ip']
+        score   = resultado['abuse_score']
+        riesgo  = resultado['riesgo']
+        reports = resultado['total_reports']
+        pais    = resultado['pais']
+
+        linea = f"\n🔍 AbuseIPDB | {ip} | Score: {score}% | {riesgo} | Reports: {reports} | {pais}"
+        texto_actual = self.advertencias.toPlainText()
+        self.advertencias.setPlainText(linea + "\n" + texto_actual)
+
+        if "CRÍTICO" in riesgo:
+            self.mostrar_mensaje("Alerta de Riesgo", f"IP CRÍTICA DETECTADA: {ip}", "error")
+
+    def mostrar_error_abuse(self, error_msg):
+        logging.error(f"Error AbuseIPDB: {error_msg}")
+        linea = f"\n[X] AbuseIPDB Error: {error_msg}"
+        self.advertencias.setPlainText(linea + "\n" + self.advertencias.toPlainText())
 
 def configurar_logging():
-    """Configura el sistema de logs para escribir en archivo y consola simultáneamente."""
     logging.basicConfig(
-        level=logging.ERROR,  # Solo errores (reduce ruido en producción)
+        level=logging.ERROR,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(os.path.join(BASE_DIR, 'ids_interface.log')),  # Archivo rotativo en BASE_DIR
-            logging.StreamHandler()                    # Consola
+            logging.FileHandler(os.path.join(BASE_DIR, 'ids_interface.log')),
+            logging.StreamHandler()
         ]
     )
 
 def limpiar_memoria_periodica():
-    """Limpia estructuras globales cuando superan los límites configurados."""
     global eventos_detectados, advertencias_cont
     with data_lock:
-        # Si supera el límite: conserva solo la mitad más reciente
         if len(eventos_detectados) > MAX_EVENTOS_MEMORIA:
             eventos_list = list(eventos_detectados)
             eventos_detectados.clear()
             eventos_detectados.extend(eventos_list[-MAX_EVENTOS_MEMORIA//2:])
 
-        # Limita el diccionario de advertencias a las 500 IPs con más actividad
         if len(advertencias_cont) > 1000:
             items_sorted = sorted(advertencias_cont.items(), key=lambda x: x[1], reverse=True)
             advertencias_cont.clear()
             advertencias_cont.update(dict(items_sorted[:500]))
 
-
-# =============================================================================
-# PUNTO DE ENTRADA DE LA APLICACIÓN
-# =============================================================================
 if __name__ == "__main__":
     configurar_logging()
-
+    
     app = QApplication(sys.argv)
-    # Atributos de rendimiento Qt: evita widgets nativos anidados y oculta íconos en menús
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings, True)
     app.setAttribute(Qt.AA_DontShowIconsInMenus, True)
+    
+    setTheme(Theme.DARK)
 
-    # Timer de limpieza de memoria cada 60 segundos
     cleanup_timer = QTimer()
     cleanup_timer.timeout.connect(limpiar_memoria_periodica)
     cleanup_timer.start(60000)
@@ -1594,13 +1398,8 @@ if __name__ == "__main__":
     try:
         ventana = IDSInterface()
         ventana.show()
-        print("IDS Interface Optimizada iniciada")
+        print("IDS Interface Fluent Optimizada iniciada")
         print(f"Límites: Tabla={MAX_EVENTOS_TABLA} | Memoria={MAX_EVENTOS_MEMORIA} | Tráfico={MAX_TRAFICO_LINEAS}")
-        sys.exit(app.exec_())  # Inicia el event loop de Qt — bloquea hasta cierre
+        sys.exit(app.exec_())
     except Exception as e:
-        logging.error(f"Error crítico en la aplicación: {e}")
-        sys.exit(1)
-
-# =============================================================================
-# FIN DEL SCRIPT — interfasc.py
-# =============================================================================
+        logging.error(f"Error en la ejecución principal: {e}")

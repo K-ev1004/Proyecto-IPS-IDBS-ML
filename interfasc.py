@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QFileDialog, QSplitter,
     QMessageBox
 )
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QSettings
 from PyQt5.QtGui import QFont, QColor, QBrush
 
 # qfluentwidgets para diseño moderno
@@ -112,6 +112,9 @@ class IDSInterface(FluentWindow):
         self.resize(1350, 900)
         self.modo_oscuro = True
         
+        self.settings = QSettings("IDS_UNIPAZ", "Configuracion")
+        self._cargar_preferencias()
+        
         self.last_table_update     = 0
         self.last_graph_update     = 0
         self.update_pending        = False
@@ -142,6 +145,22 @@ class IDSInterface(FluentWindow):
 
         self.setup_timers()
         self.setup_signals()
+
+    def _cargar_preferencias(self):
+        if ids:
+            try:
+                # Carga los valores de QSettings, con fallback a los valores originales de ids.py
+                ids.THRESHOLD_SYN_FLOOD = int(self.settings.value("thresh_syn", ids.THRESHOLD_SYN_FLOOD))
+                ids.THRESHOLD_DDOS = int(self.settings.value("thresh_ddos", ids.THRESHOLD_DDOS))
+                ids.THRESHOLD_UDP_FLOOD = int(self.settings.value("thresh_udp", ids.THRESHOLD_UDP_FLOOD))
+                ids.PORT_SCAN_THRESHOLD = int(self.settings.value("thresh_scan", ids.PORT_SCAN_THRESHOLD))
+            except Exception as e:
+                logging.error(f"Error cargando preferencias: {e}")
+
+    def _update_threshold(self, key, attr, value):
+        if ids:
+            setattr(ids, attr, value)
+        self.settings.setValue(key, value)
 
     def mostrar_mensaje(self, titulo, mensaje, tipo="info"):
         if tipo == "info":
@@ -453,6 +472,65 @@ class IDSInterface(FluentWindow):
         controls_layout.addWidget(self.ips_activo_cb)
 
         layout.addLayout(controls_layout)
+
+        # --- SECCIÓN DE UMBRALES DE DETECCIÓN ---
+        layout.addWidget(SubtitleLabel("Umbrales de Detección (Sensibilidad)"))
+        
+        info_umbrales = BodyLabel(
+            "Recomendaciones según el tamaño de la red (a menor número, mayor sensibilidad):\n"
+            "• Redes pequeñas/Pruebas (Tu PC o WiFi de casa):  SYN Flood: 20-50 | DDoS: 100-200 | UDP Flood: 200-300 | Port Scan: 15-20\n"
+            "• Redes Universitarias/Empresariales (Tráfico masivo):  SYN Flood: 100+ | DDoS: 1000+ | UDP Flood: 2000+ | Port Scan: 50+"
+        )
+        info_umbrales.setWordWrap(True)
+        # Usamos un estilo directo para darle un toque sutil y diferenciado
+        info_umbrales.setStyleSheet("color: #888888; font-size: 13px; font-style: italic;")
+        layout.addWidget(info_umbrales)
+
+        umbrales_layout = QHBoxLayout()
+        umbrales_layout.setSpacing(15)
+
+        # SYN Flood
+        box_syn = QVBoxLayout()
+        box_syn.addWidget(BodyLabel("SYN Flood (pkts/0.5s):"))
+        self.spin_syn = SpinBox()
+        self.spin_syn.setRange(5, 5000)
+        self.spin_syn.setValue(ids.THRESHOLD_SYN_FLOOD)
+        self.spin_syn.valueChanged.connect(lambda v: self._update_threshold('thresh_syn', 'THRESHOLD_SYN_FLOOD', v))
+        box_syn.addWidget(self.spin_syn)
+        umbrales_layout.addLayout(box_syn)
+
+        # DDoS
+        box_ddos = QVBoxLayout()
+        box_ddos.addWidget(BodyLabel("DDoS (pkts/1s):"))
+        self.spin_ddos = SpinBox()
+        self.spin_ddos.setRange(10, 10000)
+        self.spin_ddos.setValue(ids.THRESHOLD_DDOS)
+        self.spin_ddos.valueChanged.connect(lambda v: self._update_threshold('thresh_ddos', 'THRESHOLD_DDOS', v))
+        box_ddos.addWidget(self.spin_ddos)
+        umbrales_layout.addLayout(box_ddos)
+
+        # UDP Flood
+        box_udp = QVBoxLayout()
+        box_udp.addWidget(BodyLabel("UDP Flood (pkts/1s):"))
+        self.spin_udp = SpinBox()
+        self.spin_udp.setRange(10, 10000)
+        self.spin_udp.setValue(ids.THRESHOLD_UDP_FLOOD)
+        self.spin_udp.valueChanged.connect(lambda v: self._update_threshold('thresh_udp', 'THRESHOLD_UDP_FLOOD', v))
+        box_udp.addWidget(self.spin_udp)
+        umbrales_layout.addLayout(box_udp)
+
+        # Port Scan
+        box_scan = QVBoxLayout()
+        box_scan.addWidget(BodyLabel("Escaneo (puertos/IP):"))
+        self.spin_scan = SpinBox()
+        self.spin_scan.setRange(5, 500)
+        self.spin_scan.setValue(ids.PORT_SCAN_THRESHOLD)
+        self.spin_scan.valueChanged.connect(lambda v: self._update_threshold('thresh_scan', 'PORT_SCAN_THRESHOLD', v))
+        box_scan.addWidget(self.spin_scan)
+        umbrales_layout.addLayout(box_scan)
+
+        layout.addLayout(umbrales_layout)
+        # --- FIN SECCIÓN UMBRALES ---
 
         layout.addWidget(SubtitleLabel("Acciones Globales"))
         
@@ -1129,20 +1207,29 @@ class IDSInterface(FluentWindow):
                     )
             self.ax_pie.set_title("Distribución de Amenazas", color=text_color, fontsize=11, pad=15, weight='bold')
             
-            # 2. Bar Chart
+            # 2. Cuadro descriptivo en lugar de Bar Chart
             self.ax_bar.clear()
             self.ax_bar.set_facecolor(bg_color)
-            if top_ips:
-                ips = [x[0] for x in top_ips]
-                counts = [x[1] for x in top_ips]
-                bar_colors = [accent_color] * len(ips)
-                self.ax_bar.bar(ips, counts, color=bar_colors, edgecolor=bg_color, linewidth=1)
-                self.ax_bar.tick_params(axis='x', rotation=15, colors=text_color, labelsize=9)
-                self.ax_bar.tick_params(axis='y', colors=text_color, labelsize=9)
-                for spine in self.ax_bar.spines.values():
-                    spine.set_edgecolor(grid_color)
-            self.ax_bar.set_title("Top 5 IPs Atacantes", color=text_color, fontsize=11, pad=15, weight='bold')
-            self.ax_bar.grid(True, axis='y', linestyle='--', alpha=0.4, color=grid_color)
+            self.ax_bar.axis('off') # Ocultar ejes
+            
+            description = (
+                "IPS-IDBS-ML (Intrusion Prevention System)\n\n"
+                "Capacidad de Detección y Bloqueo:\n"
+                "• DoS / DDoS (Inundación de red)\n"
+                "• Escaneo de Puertos y Reconocimiento\n"
+                "• Fuerza Bruta (SSH, FTP, etc.)\n"
+                "• Actividad de Malware y Botnets\n"
+                "• Anomalías detectadas por Machine Learning"
+            )
+            
+            self.ax_bar.text(
+                0.5, 0.5, description,
+                transform=self.ax_bar.transAxes,
+                fontsize=11, color=text_color,
+                ha='center', va='center', weight='bold',
+                bbox=dict(facecolor=bg_color, edgecolor=accent_color, boxstyle='round,pad=1', alpha=0.8)
+            )
+            self.ax_bar.set_title("Protección Activa", color=text_color, fontsize=12, pad=15, weight='bold')
 
             # 3. Line Chart
             self.ax_line.clear()
@@ -1384,6 +1471,16 @@ def limpiar_memoria_periodica():
 
 if __name__ == "__main__":
     configurar_logging()
+    
+    # Habilitar soporte para pantallas de alta resolución (High DPI)
+    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        
+    # En PyQt5, es recomendable ajustar la política de escala a veces
+    # os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+    # os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     
     app = QApplication(sys.argv)
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings, True)

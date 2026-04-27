@@ -13,6 +13,15 @@ from datetime import datetime
 # Configuración de logs para auditoría de bloqueos
 LOG_BLOQUEOS = "logs_bloqueos.txt"
 
+def is_admin():
+    """Verifica si el script tiene privilegios de administrador (Windows)."""
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except AttributeError:
+        # En sistemas no-Windows o si falla la llamada
+        return False
+
 def _ejecutar_comando_firewall(comando):
     """Ejecuta un comando de netsh en Windows de forma segura."""
     try:
@@ -44,6 +53,10 @@ def bloquear_ip(ip, duracion_minutos=30):
     """
     Bloquea una IP en el Firewall de Windows creando una regla de entrada.
     """
+    if not is_admin():
+        print(f"[X] ERROR CRÍTICO: No se puede bloquear {ip}. Se requieren privilegios de ADMINISTRADOR.")
+        return False
+
     nombre_regla = f"IDS_BLOCK_{ip}"
     
     # Comando de PowerShell para crear regla de bloqueo
@@ -59,7 +72,8 @@ def bloquear_ip(ip, duracion_minutos=30):
         threading.Thread(target=programar_desbloqueo, args=(ip, duracion_minutos), daemon=True).start()
         return True
     else:
-        print(f"[X] Error al bloquear IP {ip}: {output}")
+        print(f"[X] Error al ejecutar comando de bloqueo para {ip}. Verifique que PowerShell esté disponible.")
+        logging.error(f"Error Firewall: {output}")
         return False
 
 def desbloquear_ip(ip):

@@ -76,21 +76,30 @@ ips_activo = False
 # Referencia global al objeto AsyncSniffer para poder detenerlo posteriormente
 sniffer: AsyncSniffer = None
 
-# --- UMBRALES DE DETECCIÓN ---
+# --- UMBRALES DE DETECCIÓN (CONFIGURABLES DESDE UI) ---
 # Número de paquetes SYN en 500ms para declarar SYN Flood
-THRESHOLD_SYN_FLOOD  = 10
+# Ajustado a 20 para redes pequeñas/pruebas (antes 100)
+THRESHOLD_SYN_FLOOD  = 20
 
 # Número de paquetes hacia un destino en 1s para declarar DDoS
-THRESHOLD_DDOS       = 500
+# Ajustado a 100 para redes pequeñas/pruebas (antes 1000)
+THRESHOLD_DDOS       = 100
 
 # Número de puertos únicos desde una IP para declarar Port Scan
-PORT_SCAN_THRESHOLD  = 10
+# Ajustado a 15 para detectar escaneos rápidos sin ser tan permisivo (antes 50)
+PORT_SCAN_THRESHOLD  = 15
 
 # Número de paquetes UDP hacia un destino en 1s para declarar UDP Flood
-THRESHOLD_UDP_FLOOD  = 500
+# Ajustado a 200 para redes pequeñas/pruebas (antes 2000)
+THRESHOLD_UDP_FLOOD  = 200
 
 # Tiempo mínimo en segundos entre alertas de la misma IP (anti-spam)
 TIEMPO_ENTRE_ALERTAS = 2
+
+# --- PROTOCOLOS DE DISCOVERY (RUIDO) ---
+# Puertos que generan gran volumen de tráfico legítimo por descubrimiento automático
+# 5353: mDNS, 5355: LLMNR, 1900: SSDP, 137/138: NetBIOS
+DISCOVERY_PORTS = {5353, 5355, 1900, 137, 138}
 
 # IP local del sistema — se detecta automáticamente para evitar auto-detección falsa
 try:
@@ -133,11 +142,12 @@ IPS_CONFIABLES = {
     "2.22.20.72",    # Akamai
 }
 
-# Rangos CIDR de redes confiables
-# ipaddress.ip_network(): Crea objeto de red para comparación eficiente
+# Rangos CIDR de redes confiables (UNIVERSIDAD)
+# Se restauran las redes privadas para evitar falsos positivos internos masivos
 RANGOS_CONFIABLES = [
-    ipaddress.ip_network('10.0.0.0/8'),        # Red privada clase A (RFC 1918)
-    ipaddress.ip_network('172.16.0.0/12'),      # Red privada clase B (RFC 1918)
+    ipaddress.ip_network('10.0.0.0/8'),         # Red Privada Corporativa / Universidad
+    ipaddress.ip_network('172.16.0.0/12'),      # Red Privada Corporativa / Universidad
+    ipaddress.ip_network('192.168.0.0/16'),     # Red Privada Doméstica / Laboratorios
     ipaddress.ip_network('20.110.205.0/24'),    # Azure / Microsoft
     ipaddress.ip_network('40.0.0.0/8'),         # Azure
     ipaddress.ip_network('52.0.0.0/8'),         # AWS
@@ -391,8 +401,9 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
 
     timestamp = time.ctime()  # Timestamp legible: "Mon Jun 10 14:23:01 2024"
 
-    # Clasificación ML: si está habilitada y el modelo cargó correctamente
-    if ips_activo and usar_ml:
+    # Clasificación ML: ahora se ejecuta SIEMPRE que usar_ml=True
+    # (antes dependía de ips_activo, lo que impedía clasificación sin IPS)
+    if usar_ml and modelo_ml is not None:
         pred_ml, confianza = clasificar_ataque_ml(ip_src, ip_dst, puerto, protocolo, flag)
         
         # Solo confiamos en el ML si la probabilidad es ALTA (>= 70%)
@@ -484,8 +495,10 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
             bloqueo_real = False
             try:
                 bloqueo_real = respuesta_activa.bloquear_ip(ip_src, duracion)
+                if not bloqueo_real:
+                    print(f"[X] IPS FALLIDO: El bloqueo de {ip_src} no se ejecutó. ¿Ejecutó como Administrador?")
             except Exception as e:
-                print(f"[!] Bloqueo en firewall no disponible (requiere admin): {e}")
+                print(f"[!] Bloqueo en firewall no disponible: {e}")
 
             # Registra en la base de datos local (siempre, independiente del firewall)
             try:
@@ -548,10 +561,21 @@ def detectar_ddos(packet):
     if packet.haslayer(scapy.IP):
         ip_dst   = packet[scapy.IP].dst
         ip_src   = packet[scapy.IP].src
-        puerto   = packet[scapy.TCP].dport if packet.haslayer(scapy.TCP) else 0
-        protocolo = 'TCP' if packet.haslayer(scapy.TCP) else 'UDP'
+        
+        # Determina puerto y protocolo
+        if packet.haslayer(scapy.TCP):
+            puerto = packet[scapy.TCP].dport
+            protocolo = 'TCP'
+        elif packet.haslayer(scapy.UDP):
+            puerto = packet[scapy.UDP].dport
+            protocolo = 'UDP'
+        else:
+            puerto = 0
+            protocolo = 'OTRO'
 
-        # Filtra UDP sin puerto — paquetes fragmentados o malformados
+        # --- FILTROS DE RUIDO ---
+        if puerto in DISCOVERY_PORTS:
+            return  # Ignora mDNS, SSDP, etc.
         if protocolo == 'UDP' and puerto == 0:
             return
 
@@ -560,25 +584,49 @@ def detectar_ddos(packet):
         # Ventana de 1 segundo para medir volumen de tráfico hacia el destino
         paquetes_por_ip[ip_dst] = [ts for ts in paquetes_por_ip[ip_dst] if t - ts <= 1]
 
+        # Si ya se detectó un UDP Flood (más específico), no disparamos DDoS genérico
+        # Esto evita la duplicidad de alertas en la interfaz
         if len(paquetes_por_ip[ip_dst]) > THRESHOLD_DDOS:
+            if protocolo == 'UDP' and len(paquetes_por_ip[ip_dst]) > THRESHOLD_UDP_FLOOD:
+                return # Dejamos que lo maneje detectar_udp_flood
             guardar_ataque(ip_src, "DDoS Distribuido", protocolo, puerto, ip_dst)
 
 
-# --- DETECTOR 3: ESCANEO DE PUERTOS ---
-# Patrón: Una IP toca >1000 puertos distintos en el destino
-# Herramientas como nmap generan este patrón al mapear servicios activos
 def detectar_escaneo_puertos(packet):
-    if packet.haslayer(scapy.TCP) and packet[scapy.TCP].flags == 'S':
-        ip_src = packet[scapy.IP].src
-        ip_dst = packet[scapy.IP].dst
+    """
+    Detecta escaneo de puertos TCP y UDP. 
+    Se activa cuando una IP toca más de PORT_SCAN_THRESHOLD puertos únicos.
+    Cubre: SYN Scan (-sS), Connect Scan (-sT), NULL, FIN, XMAS y UDP Scan (-sU).
+    """
+    if not packet.haslayer(scapy.IP):
+        return
+
+    ip_src = packet[scapy.IP].src
+    ip_dst = packet[scapy.IP].dst
+
+    # 1. Detección TCP (Cualquier intento de conexión o flags inusuales)
+    if packet.haslayer(scapy.TCP):
+        flags = str(packet[scapy.TCP].flags)
         puerto = packet[scapy.TCP].dport
+        # Consideramos 'intento' cualquier flag que no sea solo ACK (tráfico establecido)
+        if flags != 'A':
+            puertos_por_ip[ip_src].add(f"TCP:{puerto}")
 
-        # set.add(): Agrega el puerto al conjunto (ignora duplicados automáticamente)
-        puertos_por_ip[ip_src].add(puerto)
+    # 2. Detección UDP 
+    elif packet.haslayer(scapy.UDP):
+        puerto = packet[scapy.UDP].dport
+        # Omitimos puertos de discovery para no ensuciar el contador de escaneo
+        if puerto not in DISCOVERY_PORTS:
+            puertos_por_ip[ip_src].add(f"UDP:{puerto}")
 
-        # len(set): Número de puertos ÚNICOS probados — métrica clave del Port Scan
-        if len(puertos_por_ip[ip_src]) > PORT_SCAN_THRESHOLD:
-            guardar_ataque(ip_src, "Escaneo de Puertos", 'TCP', puerto, ip_dst)
+    # Evaluación de Umbral
+    if len(puertos_por_ip[ip_src]) > PORT_SCAN_THRESHOLD:
+        tipo = "Escaneo de Puertos"
+        # Reiniciamos parcialmente para no inundar, pero mantenemos registro para bloqueo persistente
+        guardar_ataque(ip_src, tipo, "TCP/UDP", "Múltiples", ip_dst)
+        # Limpieza ligera para permitir redetección si el bloqueo falla
+        if len(puertos_por_ip[ip_src]) > PORT_SCAN_THRESHOLD + 20:
+             puertos_por_ip[ip_src].clear()
 
 
 # --- DETECTOR 4: EXPLOITS ---
@@ -678,21 +726,21 @@ def detectar_sql_injection(packet):
 # Patrón: >1000 paquetes UDP hacia el mismo destino en 1 segundo
 # Variante volumétrica del DDoS usando protocolo UDP (sin handshake)
 def detectar_udp_flood(packet):
-    if packet.haslayer(scapy.IP):
+    if packet.haslayer(scapy.UDP):
         ip_dst    = packet[scapy.IP].dst
         ip_src    = packet[scapy.IP].src
-        puerto    = packet[scapy.UDP].dport if packet.haslayer(scapy.UDP) else 0
-        protocolo = 'UDP' if packet.haslayer(scapy.UDP) else 'TCP'
+        puerto    = packet[scapy.UDP].dport
 
-        if protocolo == 'TCP' and puerto == 0:
-            return
+        # --- FILTROS DE RUIDO ---
+        if puerto in DISCOVERY_PORTS:
+            return # Evita falsos positivos por mDNS/SSDP en redes densas
 
         t = time.time()
         paquetes_por_ip[ip_dst].append(t)
         paquetes_por_ip[ip_dst] = [ts for ts in paquetes_por_ip[ip_dst] if t - ts <= 1]
 
         if len(paquetes_por_ip[ip_dst]) > THRESHOLD_UDP_FLOOD:
-            guardar_ataque(ip_src, "UDP Flood", protocolo, puerto, ip_dst)
+            guardar_ataque(ip_src, "UDP Flood", 'UDP', puerto, ip_dst)
 
 
 # =============================================================================

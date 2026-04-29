@@ -79,16 +79,22 @@ def bloquear_ip(ip, duracion_minutos=30):
 def desbloquear_ip(ip):
     """Elimina la regla de bloqueo de una IP en el Firewall de Windows."""
     nombre_regla = f"IDS_BLOCK_{ip}"
-    comando = f"Remove-NetFirewallRule -DisplayName '{nombre_regla}'"
     
-    exito, output = _ejecutar_comando_firewall(comando)
-    if exito:
-        registrar_bloqueo(ip, "DESBLOQUEO_AUTOMATICO")
-        return True
-    else:
-        # Si la regla no existe, 'netsh' retorna error pero el objetivo es el mismo
-        print(f"[!] Aviso al desbloquear IP {ip}: {output}")
-        return False
+    # Intento 1: PowerShell con ErrorAction para evitar excepciones molestas
+    comando_ps = f"Remove-NetFirewallRule -DisplayName '{nombre_regla}' -ErrorAction SilentlyContinue"
+    _ejecutar_comando_firewall(comando_ps)
+    
+    # Intento 2: netsh como respaldo (más robusto en algunos entornos)
+    comando_netsh = f"netsh advfirewall firewall delete rule name=\"{nombre_regla}\""
+    exito, output = _ejecutar_comando_firewall(comando_netsh)
+    
+    # Consideramos éxito siempre, ya que si la regla no existe (ya fue eliminada), el objetivo se cumple.
+    # Además, permite que la interfaz gráfica (UI) actualice el estado a "Desbloqueado" sin quedarse atascada.
+    if not exito and "Ninguna regla" not in output and "No rules" not in output:
+        print(f"[!] Aviso al desbloquear IP {ip}: {output.strip()}")
+        
+    registrar_bloqueo(ip, "DESBLOQUEO_EJECUTADO")
+    return True
 
 def programar_desbloqueo(ip, minutos):
     """Hilo de espera para desbloqueo automático."""

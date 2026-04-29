@@ -23,7 +23,7 @@ from datetime import datetime
 # Nota: Esta ruta está hardcodeada — en producción sería preferible leerla desde un config
 # La función guardar_evento_en_dataset usa su propia ruta interna (carpeta/nombre separados)
 # =============================================================================
-csv_file = "C:/Users/Usuario/Desktop/IDS/IDS_unipaz/Dataset/eventos_detectados.csv"
+csv_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Dataset", "eventos_detectados.csv")
 
 
 # =============================================================================
@@ -45,7 +45,7 @@ def guardar_evento_en_dataset(ip_src, ip_dst, puerto, protocolo, flag, tipo_ataq
     # Ruta absoluta a la carpeta donde se almacenará el dataset
     # Se usa raw string (r"...") para evitar que las barras invertidas sean interpretadas
     # como secuencias de escape de Python en Windows
-    carpeta = r"C:\Users\Usuario\Desktop\IDS\IDS_unipaz\Dataset"
+    carpeta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Dataset")
 
     # Verifica si la carpeta existe antes de intentar escribir
     # Si no existe, la crea para evitar FileNotFoundError

@@ -25,8 +25,9 @@ from PyQt5.QtGui import QFont, QColor, QBrush
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, InfoBar, InfoBarPosition,
     PrimaryPushButton, TransparentPushButton, TableWidget,
-    ComboBox, LineEdit, SpinBox, CheckBox, PlainTextEdit,
-    SubtitleLabel, BodyLabel, TitleLabel, Theme, setTheme, FluentIcon as FIF
+    ComboBox, LineEdit, SpinBox, CheckBox, PlainTextEdit, TextEdit,
+    SubtitleLabel, BodyLabel, TitleLabel, Theme, setTheme, FluentIcon as FIF,
+    SimpleCardWidget
 )
 
 # Matplotlib
@@ -182,7 +183,13 @@ class IDSInterface(FluentWindow):
         border = "#3e3e42" if self.modo_oscuro else "#e1dfdd"
 
         def b_style(color):
-            return f"padding: 10px 16px; border-radius: 6px; font-weight: 500; font-size: 13px; background-color: {bg}; color: {color}; border: 1px solid {border}; border-left: 4px solid {color};"
+            return f"padding: 12px 20px; border-radius: 8px; font-weight: 600; font-size: 15px; background-color: {bg}; color: {color}; border: 1px solid {border}; border-left: 5px solid {color};"
+
+        def simple_style():
+            text_color = "#ffffff" if self.modo_oscuro else "#000000"
+            bg_color = "#30373b" if self.modo_oscuro else "#f3f3f3"
+            border_color = "#3e3e42" if self.modo_oscuro else "#e1dfdd"
+            return f"padding: 8px 16px; border-radius: 6px; font-weight: 500; font-size: 15px; background-color: {bg_color}; color: {text_color}; border: 1px solid {border_color};"
 
         c_blue = "#4daafc" if self.modo_oscuro else "#0078d4"
         c_green = "#6ccb5f" if self.modo_oscuro else "#107c10"
@@ -191,11 +198,11 @@ class IDSInterface(FluentWindow):
         c_purple = "#b4a0ff" if self.modo_oscuro else "#5c2d91"
 
         if hasattr(self, 'iface_badge'):
-            self.iface_badge.setStyleSheet(b_style(c_blue))
-            self.lbl_pps.setStyleSheet(b_style(c_purple))
-            self.lbl_alerts_min.setStyleSheet(b_style(c_red))
-            self.lbl_uptime.setStyleSheet(b_style(c_green))
-            self.lbl_stats.setStyleSheet(b_style(c_orange))
+            self.iface_badge.setStyleSheet(simple_style())
+            self.lbl_pps.setStyleSheet(simple_style())
+            self.lbl_alerts_min.setStyleSheet(simple_style())
+            self.lbl_uptime.setStyleSheet(simple_style())
+            self.lbl_stats.setStyleSheet(simple_style())
 
         if hasattr(self, 'lbl_total_bloqueadas'):
             self.lbl_total_bloqueadas.setStyleSheet(b_style(c_blue))
@@ -248,7 +255,7 @@ class IDSInterface(FluentWindow):
         badges_layout.setSpacing(15)
 
         self.iface_badge = BodyLabel("Interfaz: N/A | ○ Stopped")
-        self.lbl_pps = BodyLabel("PPS: 0")
+        self.lbl_pps = BodyLabel("Paquetes por segundo: 0")
         self.lbl_alerts_min = BodyLabel("Alertas/min: 0")
         self.lbl_uptime = BodyLabel("Uptime: 00:00:00")
         self.lbl_stats = BodyLabel("Eventos: 0 | IPs únicas: 0")
@@ -299,9 +306,9 @@ class IDSInterface(FluentWindow):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(10, 0, 0, 0)
 
-        self.detalle_text = PlainTextEdit()
+        self.detalle_text = TextEdit()
         self.detalle_text.setReadOnly(True)
-        self.detalle_text.setPlainText("Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.")
+        self.detalle_text.setHtml("<p style='font-size:13px; color:#888;'>Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.</p>")
         right_layout.addWidget(SubtitleLabel("Inspección Forense del Evento"))
         right_layout.addWidget(self.detalle_text)
 
@@ -410,16 +417,91 @@ class IDSInterface(FluentWindow):
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
-        self.canvas_stats = FigureCanvas(Figure(figsize=(10, 8)))
-        self.fig_stats = self.canvas_stats.figure
+        subtitle = BodyLabel("Distribución del Tráfico Analizado y Tendencias Históricas")
+        subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(subtitle)
+
+        # -- KPIs --
+        kpi_layout = QHBoxLayout()
+        kpi_layout.setSpacing(15)
         
-        gs = self.fig_stats.add_gridspec(2, 2, height_ratios=[1, 1])
+        self.kpi_eventos = TitleLabel("0")
+        self.kpi_ips = TitleLabel("0")
+        self.kpi_bloqueos = TitleLabel("0")
         
-        self.ax_pie = self.fig_stats.add_subplot(gs[0, 0])
-        self.ax_bar = self.fig_stats.add_subplot(gs[0, 1])
-        self.ax_line = self.fig_stats.add_subplot(gs[1, :])
+        for title, value_lbl in [("Total de Eventos", self.kpi_eventos), 
+                                 ("IPs Atacantes", self.kpi_ips), 
+                                 ("Bloqueos Activos", self.kpi_bloqueos)]:
+            card = SimpleCardWidget()
+            cl = QVBoxLayout(card)
+            cl.setAlignment(Qt.AlignCenter)
+            t = SubtitleLabel(title)
+            t.setAlignment(Qt.AlignCenter)
+            value_lbl.setAlignment(Qt.AlignCenter)
+            value_lbl.setStyleSheet("color: #0078d4; font-weight: bold;")
+            cl.addWidget(t)
+            cl.addWidget(value_lbl)
+            kpi_layout.addWidget(card)
+            
+        layout.addLayout(kpi_layout)
+
+        # -- Middle Panel: Pie & Top IPs --
+        mid_layout = QHBoxLayout()
+        mid_layout.setSpacing(15)
         
-        layout.addWidget(self.canvas_stats)
+        pie_card = SimpleCardWidget()
+        pie_layout = QVBoxLayout(pie_card)
+        self.canvas_pie = FigureCanvas(Figure(figsize=(5, 4)))
+        self.canvas_pie.setStyleSheet("background-color: transparent;")
+        self.fig_pie = self.canvas_pie.figure
+        self.fig_pie.patch.set_alpha(0.0)
+        self.ax_pie = self.fig_pie.add_subplot(111)
+        pie_layout.addWidget(self.canvas_pie)
+        mid_layout.addWidget(pie_card)
+        
+        explicacion_tooltip = (
+            "<b>Glosario de Amenazas (Machine Learning):</b><br><br>"
+            "<b>• Tráfico Normal (0):</b> Conexiones regulares sin intención maliciosa.<br>"
+            "<b>• Escaneo de Puertos (1):</b> Intentos de descubrir puertos abiertos y vulnerabilidades.<br>"
+            "<b>• Fuerza Bruta (2):</b> Intentos repetitivos para adivinar contraseñas (ej. SSH/FTP).<br>"
+            "<b>• DoS / Inundación (3):</b> Ataques de Denegación de Servicio para saturar el servidor.<br>"
+            "<b>• DDoS (4):</b> Denegación de Servicio Distribuida utilizando múltiples IPs.<br>"
+            "<b>• Anomalía Tipo 9:</b> Comportamiento de red inusual que no encaja en patrones conocidos."
+        )
+        self.canvas_pie.setToolTip(explicacion_tooltip)
+        self.canvas_pie.setToolTipDuration(10000)
+
+        top_ips_card = SimpleCardWidget()
+        top_ips_layout = QVBoxLayout(top_ips_card)
+        lbl_top = SubtitleLabel("Top 5 IPs Atacantes")
+        lbl_top.setAlignment(Qt.AlignCenter)
+        top_ips_layout.addWidget(lbl_top)
+        
+        self.table_top_ips = TableWidget()
+        self.table_top_ips.setColumnCount(2)
+        self.table_top_ips.setHorizontalHeaderLabels(["IP Origen", "Nº de Alertas"])
+        self.table_top_ips.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_top_ips.verticalHeader().hide()
+        self.table_top_ips.setEditTriggers(TableWidget.NoEditTriggers)
+        self.table_top_ips.setShowGrid(False)
+        self.table_top_ips.setBorderRadius(4)
+        top_ips_layout.addWidget(self.table_top_ips)
+        mid_layout.addWidget(top_ips_card)
+        
+        layout.addLayout(mid_layout)
+
+        # -- Bottom Panel: Line --
+        line_card = SimpleCardWidget()
+        line_layout = QVBoxLayout(line_card)
+        self.canvas_line = FigureCanvas(Figure(figsize=(10, 3)))
+        self.canvas_line.setStyleSheet("background-color: transparent;")
+        self.fig_line = self.canvas_line.figure
+        self.fig_line.patch.set_alpha(0.0)
+        self.ax_line = self.fig_line.add_subplot(111)
+        line_layout.addWidget(self.canvas_line)
+        layout.addWidget(line_card)
+
+
 
     def setup_settings_page(self):
         layout = QVBoxLayout(self.page_settings)
@@ -947,7 +1029,7 @@ class IDSInterface(FluentWindow):
         try:
             pps = getattr(self, "_pps_count", 0)
             self.history_pps.append(pps)
-            self.lbl_pps.setText(f"PPS: {pps}")
+            self.lbl_pps.setText(f"Paquetes por segundo: {pps}")
             self._pps_count = 0
         except Exception as e:
             logging.error(f"Error PPS tick: {e}")
@@ -981,7 +1063,7 @@ class IDSInterface(FluentWindow):
         try:
             items = self.table.selectedItems()
             if not items:
-                self.detalle_text.setPlainText("Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.")
+                self.detalle_text.setHtml("<p style='font-size:13px; color:#888;'>Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.</p>")
                 return
 
             row   = items[0].row()
@@ -994,22 +1076,36 @@ class IDSInterface(FluentWindow):
             flag   = self.table.item(row, 6).text() if self.table.item(row, 6) else ""
             tipo   = self.table.item(row, 7).text() if self.table.item(row, 7) else ""
 
-            evidencia = [f"- Protocolo/Flag: {proto}/{flag}"]
-            if "syn flood"   in tipo.lower(): evidencia.append("- Indicador: volumen alto de SYN en ventana corta")
-            if "ddos"        in tipo.lower(): evidencia.append("- Indicador: volumen alto hacia destino (posible DDoS)")
-            if "escaneo"     in tipo.lower(): evidencia.append("- Indicador: múltiples puertos probados desde una misma IP")
-            if "sql"         in tipo.lower(): evidencia.append("- Indicador: patrón de payload compatible con SQLi")
+            evidencia = [f"<li>Protocolo/Flag: <b>{proto} / {flag}</b></li>"]
+            if "syn flood"   in tipo.lower(): evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
+            if "ddos"        in tipo.lower(): evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
+            if "escaneo"     in tipo.lower(): evidencia.append("<li>Indicador: múltiples puertos probados desde una misma IP</li>")
+            if "sql"         in tipo.lower(): evidencia.append("<li>Indicador: patrón de payload compatible con SQLi</li>")
 
-            txt = (
-                f"SEVERIDAD: {sev}\nHORA: {hora}\nTIPO: {tipo}\n"
-                f"IP ORIGEN: {ip_src}\nIP DESTINO: {ip_dst}\nPUERTO: {puerto}\n\n"
-                f"EVIDENCIA (resumen):\n" + "\n".join(evidencia) + "\n\n"
-                f"ACCIONES SUGERIDAS:\n"
-                f"- Llamar al profesor Jhoni si la alarma persiste\n"
-                f"- Revisar logs del servicio en el puerto destino\n"
-                f"- Bloquear/limitar tráfico desde la interfaz de IPS si es recurrente\n"
-            )
-            self.detalle_text.setPlainText(txt)
+            color_sev = self._compute_severity(tipo)[1]
+            txt_color = "#e1dfdd" if self.modo_oscuro else "#333333"
+
+            html_txt = f"""
+            <div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; color: {txt_color};">
+                <h3 style="color: {color_sev}; margin-top: 0; margin-bottom: 10px;">Análisis Forense: {tipo}</h3>
+                <p style="margin-top: 0;"><b>Severidad:</b> <span style="color:{color_sev}; font-weight:bold;">{sev}</span> &nbsp;&nbsp;|&nbsp;&nbsp; <b>Hora:</b> {hora}</p>
+                <table style="width: 100%; margin-bottom: 15px;">
+                    <tr><td style="padding: 3px 0;"><b>IP Origen:</b> {ip_src}</td><td style="padding: 3px 0;"><b>IP Destino:</b> {ip_dst}</td></tr>
+                    <tr><td style="padding: 3px 0;"><b>Puerto:</b> {puerto}</td><td style="padding: 3px 0;"><b>Protocolo:</b> {proto}</td></tr>
+                </table>
+                <h4 style="color: #4daafc; margin-bottom: 5px;">Evidencia Detectada</h4>
+                <ul style="margin-top: 0; margin-bottom: 15px; padding-left: 20px;">
+                    {"".join(evidencia)}
+                </ul>
+                <h4 style="color: #6ccb5f; margin-bottom: 5px;">Acciones Sugeridas</h4>
+                <ul style="margin-top: 0; padding-left: 20px;">
+                    <li>Llamar al profesor Jhoni si la alarma persiste.</li>
+                    <li>Revisar logs del servicio en el puerto destino.</li>
+                    <li>Bloquear/limitar tráfico desde la interfaz de IPS si es recurrente.</li>
+                </ul>
+            </div>
+            """
+            self.detalle_text.setHtml(html_txt)
         except Exception as e:
             logging.error(f"Error actualizando detalle: {e}")
 
@@ -1167,10 +1263,17 @@ class IDSInterface(FluentWindow):
         self.history_pps.clear()
         self.history_pps.extend([0]*60)
         
-        self.ax_pie.clear()
-        self.ax_bar.clear()
-        self.ax_line.clear()
-        self.canvas_stats.draw()
+        if hasattr(self, 'ax_pie'):
+            self.ax_pie.clear()
+            self.ax_line.clear()
+            self.canvas_pie.draw()
+            self.canvas_line.draw()
+            
+        if hasattr(self, 'table_top_ips'):
+            self.table_top_ips.setRowCount(0)
+            self.kpi_eventos.setText("0")
+            self.kpi_ips.setText("0")
+            self.kpi_bloqueos.setText("0")
         
         self.mostrar_mensaje("Limpieza", "Interfaz y registros en memoria limpiados", "info")
 
@@ -1184,18 +1287,36 @@ class IDSInterface(FluentWindow):
                 eventos_muestra = list(eventos_detectados)[-500:] if eventos_detectados else []
                 top_ips = sorted(advertencias_cont.items(), key=lambda x: x[1], reverse=True)[:5]
             
-            bg_color   = "#272727" if self.modo_oscuro else "#ffffff"
             text_color = "#ffffff" if self.modo_oscuro else "#201f1e"
             grid_color = "#3e3e42" if self.modo_oscuro else "#e1dfdd"
             accent_color = "#4daafc" if self.modo_oscuro else "#0078d4"
 
-            self.fig_stats.patch.set_facecolor(bg_color)
+            # 1. Update KPIs
+            self.kpi_eventos.setText(str(len(eventos_detectados)))
+            self.kpi_ips.setText(str(len(advertencias_cont)))
+            activos = sum(1 for b in self._bloqueos_data if b['estado'] == 'Activo') if hasattr(self, '_bloqueos_data') else 0
+            self.kpi_bloqueos.setText(str(activos))
 
-            # 1. Pie Chart
+            # 2. Pie Chart
+            self.fig_pie.patch.set_facecolor('none')
             self.ax_pie.clear()
-            self.ax_pie.set_facecolor(bg_color)
+            self.ax_pie.set_facecolor('none')
             if eventos_muestra:
-                cnt = Counter([e[6] for e in eventos_muestra])
+                import re
+                # Limpiar la etiqueta removiendo el texto "(ML: XX.X%)" para poder agrupar correctamente
+                tipos_limpios = [re.sub(r'\s*\(ML:\s*[\d\.]+%?\)', '', str(e[6])).strip() for e in eventos_muestra]
+                
+                # Mapeo de códigos numéricos a nombres descriptivos (si el ML devuelve números)
+                diccionario_ataques = {
+                    "0": "Tráfico Normal",
+                    "1": "Escaneo de Puertos",
+                    "2": "Fuerza Bruta",
+                    "3": "DoS (Inundación)",
+                    "4": "DDoS",
+                }
+                tipos_finales = [diccionario_ataques.get(t, t) for t in tipos_limpios]
+                
+                cnt = Counter(tipos_finales)
                 if cnt:
                     labels = list(cnt.keys())
                     values = list(cnt.values())
@@ -1203,37 +1324,27 @@ class IDSInterface(FluentWindow):
                     self.ax_pie.pie(
                         values, labels=labels, colors=colors,
                         autopct='%1.1f%%',
+                        radius=0.8,
                         textprops={'color': text_color, 'fontsize': 9, 'weight': 'bold'}
                     )
             self.ax_pie.set_title("Distribución de Amenazas", color=text_color, fontsize=11, pad=15, weight='bold')
-            
-            # 2. Cuadro descriptivo en lugar de Bar Chart
-            self.ax_bar.clear()
-            self.ax_bar.set_facecolor(bg_color)
-            self.ax_bar.axis('off') # Ocultar ejes
-            
-            description = (
-                "IPS-IDBS-ML (Intrusion Prevention System)\n\n"
-                "Capacidad de Detección y Bloqueo:\n"
-                "• DoS / DDoS (Inundación de red)\n"
-                "• Escaneo de Puertos y Reconocimiento\n"
-                "• Fuerza Bruta (SSH, FTP, etc.)\n"
-                "• Actividad de Malware y Botnets\n"
-                "• Anomalías detectadas por Machine Learning"
-            )
-            
-            self.ax_bar.text(
-                0.5, 0.5, description,
-                transform=self.ax_bar.transAxes,
-                fontsize=11, color=text_color,
-                ha='center', va='center', weight='bold',
-                bbox=dict(facecolor=bg_color, edgecolor=accent_color, boxstyle='round,pad=1', alpha=0.8)
-            )
-            self.ax_bar.set_title("Protección Activa", color=text_color, fontsize=12, pad=15, weight='bold')
+            self.fig_pie.tight_layout(pad=2.0)
+            self.canvas_pie.draw_idle()
 
-            # 3. Line Chart
+            # 3. Top IPs Table
+            self.table_top_ips.setRowCount(0)
+            for i, (ip, count) in enumerate(top_ips):
+                self.table_top_ips.insertRow(i)
+                item_ip = QTableWidgetItem(ip)
+                item_count = QTableWidgetItem(str(count))
+                item_count.setTextAlignment(Qt.AlignCenter)
+                self.table_top_ips.setItem(i, 0, item_ip)
+                self.table_top_ips.setItem(i, 1, item_count)
+
+            # 4. Line Chart
+            self.fig_line.patch.set_facecolor('none')
             self.ax_line.clear()
-            self.ax_line.set_facecolor(bg_color)
+            self.ax_line.set_facecolor('none')
             x_data = list(range(len(self.history_pps)))
             self.ax_line.plot(x_data, list(self.history_pps), color=accent_color, linewidth=2.5, marker='o', markersize=4, label="Paquetes / Seg")
             self.ax_line.fill_between(x_data, list(self.history_pps), color=accent_color, alpha=0.15)
@@ -1244,9 +1355,8 @@ class IDSInterface(FluentWindow):
             self.ax_line.grid(True, linestyle='--', alpha=0.4, color=grid_color)
             self.ax_line.set_xlim(0, max(1, len(x_data) - 1))
             self.ax_line.set_ylim(bottom=0)
-
-            self.fig_stats.tight_layout(pad=4.0)
-            self.canvas_stats.draw_idle()
+            self.fig_line.tight_layout(pad=1.0)
+            self.canvas_line.draw_idle()
 
         except Exception as e:
             logging.error(f"Error actualizando gráficos avanzados: {e}")

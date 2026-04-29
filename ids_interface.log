@@ -1,0 +1,2 @@
+2026-04-28 16:32:47,556 - ERROR - Error actualizando gráficos avanzados: 'IDSInterface' object has no attribute 'table_top_ips'
+2026-04-28 16:32:57,536 - ERROR - Error actualizando gráficos avanzados: 'IDSInterface' object has no attribute 'table_top_ips'

@@ -346,12 +346,18 @@ def clasificar_ataque_ml(ip_src, ip_dst, puerto, protocolo, flag):
         flag_encoded = flag_encoder.transform([flag])[0] \
             if flag_encoder and flag in flag_encoder.classes_ else 0
 
+        # Convertir puerto a entero. Si es "Múltiples", usar 0.
+        try:
+            puerto_int = int(puerto)
+        except (ValueError, TypeError):
+            puerto_int = 0
+
         # Construye DataFrame con las mismas columnas usadas en CEREBRO.PY
         # El modelo espera exactamente estos nombres de columna en este orden
         df_entrada = pd.DataFrame({
             'src_ip_int':        [src_ip_int],
             'dst_ip_int':        [dst_ip_int],
-            'dst_port':          [puerto],
+            'dst_port':          [puerto_int],
             'protocol_encoded':  [protocolo_encoded],
             'flag_encoded':      [flag_encoded],
             'hour':              [hora]
@@ -366,13 +372,16 @@ def clasificar_ataque_ml(ip_src, ip_dst, puerto, protocolo, flag):
         confianza = probs.max()
 
         # inverse_transform(): Convierte el entero predicho de vuelta al nombre original
-        tipo_str = tipo_ataque_encoder.inverse_transform([tipo_pred])[0]
+        try:
+            tipo_str = tipo_ataque_encoder.inverse_transform([tipo_pred])[0]
+        except ValueError:
+            # Si el modelo predice una clase que el encoder no conoce (ej. 9)
+            tipo_str = f"Anomalía Tipo {tipo_pred}"
 
         return tipo_str, confianza
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        print(f"[X] Advertencia en ML Predict: {e}")
         return "Desconocido", 0.0
 
 
@@ -518,15 +527,23 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
 
 
 
+import time
+_ultimo_tiempo_emision = 0
+
 # =============================================================================
 # FUNCIÓN: mostrar_paquete
 # Propósito: Genera resumen textual del paquete y lo emite a la interfaz
-# packet.summary(): Método de Scapy que retorna string con capas del paquete
 # =============================================================================
 def mostrar_paquete(packet):
-    resumen = packet.summary()
-    print(f"Paquete capturado: {resumen}")
-    comunicador.nuevo_trafico.emit(f"{resumen}")  # Actualiza "Tráfico en Vivo" en la UI
+    global _ultimo_tiempo_emision
+    # Se elimina el print() para evitar lag fatal en consola
+    
+    current_time = time.time()
+    # Emitir señal como máximo 10 veces por segundo para no ahogar la UI
+    if current_time - _ultimo_tiempo_emision > 0.1:
+        resumen = packet.summary()
+        comunicador.nuevo_trafico.emit(resumen)
+        _ultimo_tiempo_emision = current_time
 
 
 # =============================================================================

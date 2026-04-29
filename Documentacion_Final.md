@@ -58,4 +58,16 @@ El script original de pruebas enviaba paquetes uno a uno usando la IP local de l
   - Incluye **generación de IPs falsas** (IP Spoofing) aleatorias en cada ejecución. Esto arregló el "misterio" final donde la interfaz parecía dejar de bloquear ataques, cuando en realidad la IP hardcodeada ya estaba bloqueada (por ende, el IPS la ignoraba silenciosamente).
 
 ---
+---
+
+## 7. Glosario de Amenazas (Modelado ML)
+Para facilitar la interpretación de los resultados en el Dashboard, se ha estandarizado el siguiente glosario de anomalías:
+
+*   **Inyección SQL (Tipo 1):** Intentos de inyectar comandos maliciosos en peticiones HTTP para extraer o borrar datos de la base de datos.
+*   **Posible Exploit (Tipo 4):** Tráfico dirigido a puertos sensibles (21, 22, 445, 3389) que indica un intento de aprovechar una vulnerabilidad de software.
+*   **SYN Flood (Tipo 5):** Ataque de denegación de servicio que busca agotar las conexiones del servidor enviando paquetes de inicio (SYN) sin completarlos.
+*   **UDP Flood (Tipo 6):** Saturación de la red mediante el envío masivo de paquetes UDP, común en ataques volumétricos.
+*   **Anomalías Tipo 9 (Otros/Varios):** Una categoría especial que agrupa el tráfico normal y ataques que, debido a su baja frecuencia o agrupación en el preprocesamiento, se identifican como "comportamiento inusual general".
+
+---
 *Hecho por Antigravity AI.*

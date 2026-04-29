@@ -458,15 +458,16 @@ class IDSInterface(FluentWindow):
         self.ax_pie = self.fig_pie.add_subplot(111)
         pie_layout.addWidget(self.canvas_pie)
         mid_layout.addWidget(pie_card)
+        mid_layout.setStretchFactor(pie_card, 6)
         
         explicacion_tooltip = (
             "<b>Glosario de Amenazas (Machine Learning):</b><br><br>"
-            "<b>• Tráfico Normal (0):</b> Conexiones regulares sin intención maliciosa.<br>"
-            "<b>• Escaneo de Puertos (1):</b> Intentos de descubrir puertos abiertos y vulnerabilidades.<br>"
-            "<b>• Fuerza Bruta (2):</b> Intentos repetitivos para adivinar contraseñas (ej. SSH/FTP).<br>"
-            "<b>• DoS / Inundación (3):</b> Ataques de Denegación de Servicio para saturar el servidor.<br>"
-            "<b>• DDoS (4):</b> Denegación de Servicio Distribuida utilizando múltiples IPs.<br>"
-            "<b>• Anomalía Tipo 9:</b> Comportamiento de red inusual que no encaja en patrones conocidos."
+            "<b>• Inyección SQL (1):</b> Intentos de manipulación de BD mediante comandos SQL maliciosos.<br>"
+            "<b>• Posible Exploit (4):</b> Intentos de conexión a puertos críticos (SMB, RDP, SSH) para explotar fallos.<br>"
+            "<b>• SYN Flood (5):</b> Saturación de recursos mediante peticiones de conexión TCP incompletas.<br>"
+            "<b>• UDP Flood (6):</b> Inundación de la red con paquetes UDP masivos sin estado.<br>"
+            "<b>• Anomalía Tipo 9 (Otros):</b> Agrupación de tráfico normal y ataques de baja frecuencia (DDoS, Port Scan).<br><br>"
+            "<i>Nota: El número entre paréntesis representa el identificador de clase del modelo de IA.</i>"
         )
         self.canvas_pie.setToolTip(explicacion_tooltip)
         self.canvas_pie.setToolTipDuration(10000)
@@ -487,6 +488,7 @@ class IDSInterface(FluentWindow):
         self.table_top_ips.setBorderRadius(4)
         top_ips_layout.addWidget(self.table_top_ips)
         mid_layout.addWidget(top_ips_card)
+        mid_layout.setStretchFactor(top_ips_card, 4)
         
         layout.addLayout(mid_layout)
 
@@ -1077,10 +1079,13 @@ class IDSInterface(FluentWindow):
             tipo   = self.table.item(row, 7).text() if self.table.item(row, 7) else ""
 
             evidencia = [f"<li>Protocolo/Flag: <b>{proto} / {flag}</b></li>"]
-            if "syn flood"   in tipo.lower(): evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
-            if "ddos"        in tipo.lower(): evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
-            if "escaneo"     in tipo.lower(): evidencia.append("<li>Indicador: múltiples puertos probados desde una misma IP</li>")
-            if "sql"         in tipo.lower(): evidencia.append("<li>Indicador: patrón de payload compatible con SQLi</li>")
+            t_low = tipo.lower()
+            if "syn flood"   in t_low: evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
+            if "ddos"        in t_low: evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
+            if "escaneo"     in t_low: evidencia.append("<li>Indicador: múltiples puertos probados desde una misma IP</li>")
+            if "sql"         in t_low: evidencia.append("<li>Indicador: patrón de payload compatible con SQLi</li>")
+            if "exploit"     in t_low: evidencia.append("<li>Indicador: conexión a puertos críticos vulnerables (SMB/RDP/SSH)</li>")
+            if "udp flood"   in t_low: evidencia.append("<li>Indicador: saturación mediante paquetes UDP masivos</li>")
 
             color_sev = self._compute_severity(tipo)[1]
             txt_color = "#e1dfdd" if self.modo_oscuro else "#333333"
@@ -1324,7 +1329,7 @@ class IDSInterface(FluentWindow):
                     self.ax_pie.pie(
                         values, labels=labels, colors=colors,
                         autopct='%1.1f%%',
-                        radius=0.8,
+                        radius=1.0,
                         textprops={'color': text_color, 'fontsize': 9, 'weight': 'bold'}
                     )
             self.ax_pie.set_title("Distribución de Amenazas", color=text_color, fontsize=11, pad=15, weight='bold')

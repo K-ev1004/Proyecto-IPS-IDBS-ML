@@ -10,12 +10,12 @@ import requests
 # Formato: "<id_numérico>:<hash_alfanumérico>"
 # Se obtiene creando un bot con @BotFather en Telegram
 # [!] SEGURIDAD: En producción debe cargarse desde una variable de entorno, no hardcodeado
-BOT_TOKEN = "8274037275:AAGoQKHXiy-heCtVGgAT16NUagN2ck9q40s"
+BOT_TOKEN = "8954487099:AAEb4Y50c1_mE0i0V6q7QXOspImkRg649Zw"
 
 # CHAT_IDS: Lista de identificadores únicos de los destinatarios de las alertas
 # Cada chat_id corresponde a un usuario o grupo de Telegram
 # Permite enviar la misma alerta a múltiples destinatarios (administradores, SOC, etc.)
-CHAT_IDS = [1016030596]  # ID del chat del administrador principal
+CHAT_IDS = [6750700630]  # ID del chat del administrador principal
 
 
 # =============================================================================

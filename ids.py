@@ -1,31 +1,41 @@
 # =============================================================================
-# ids.py — Motor principal del IDS (Intrusion Detection System)
+# ids.py v3 — Motor principal del IDS (Intrusion Detection System)
 # Captura tráfico de red en tiempo real, detecta patrones de ataque,
 # clasifica con ML, persiste en SQLite/CSV y notifica por Telegram
+# Universidad UNIPAZ
+# =============================================================================
+#
+# CAMBIOS PRINCIPALES vs v2:
+# - Integración de flujos_red.py para cálculo de variables complejas.
+# - Integración de mikrotik_api.py para respuesta activa.
+# - Análisis de VLANs (Dot1Q) para segmentación.
 # =============================================================================
 
 # Módulos estándar del sistema
-import sys          # Acceso al intérprete y argumentos de línea de comandos
-import os           # Operaciones de sistema de archivos y rutas
-import time         # Marcas de tiempo en segundos (epoch Unix)
-import re           # Expresiones regulares para detección de SQLi
-import ipaddress    # Manipulación y validación de direcciones/rangos IP (RFC 4291)
-import sqlite3      # Base de datos embebida para persistencia de eventos
-import joblib       # Carga de modelos ML serializados (.pkl)
+import os           
+import time         
+import re           
+import socket       
+import struct       
+import ipaddress    
+import sqlite3      
+import joblib       
+import pandas as pd
+import numpy as np
 
 # Módulos de concurrencia
-from threading import Thread           # Hilos para alertas asíncronas sin bloquear captura
-from collections import defaultdict, deque  # Estructuras de datos eficientes para conteo
+from threading import Thread           
+from collections import defaultdict, deque  
 
 # Scapy: Framework de captura y análisis de paquetes de red
-import scapy.all as scapy              # Todos los módulos de Scapy (capas, protocolos)
-from scapy.all import AsyncSniffer, conf    # Sniffer asíncrono no bloqueante
-conf.use_pcap = True                        # Fuerza el uso de WinPcap/Npcap en Windows
+import scapy.all as scapy              
+from scapy.all import AsyncSniffer, conf    
+conf.use_pcap = True                        
 
 # Módulos internos del proyecto IDS
-from telegram_alert import enviar_alerta          # Notificaciones Telegram
-from guardar_dataset import guardar_evento_en_dataset  # Persistencia CSV
-import respuesta_activa                              # Módulo de Respuesta Activa (IP Blocking)
+from telegram_alert import enviar_alerta          
+import mikrotik_api
+from flujos_red import FlowTracker
 
 # PyQt5: Señales para comunicación entre el motor IDS y la interfaz gráfica
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -33,75 +43,66 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 # =============================================================================
 # BASE_DIR: Ruta absoluta al directorio del proyecto
-# os.path.abspath(__file__): convierte la ruta relativa del script a absoluta
-# os.path.dirname(...): extrae solo el directorio, sin el nombre del archivo
-# Permite que todas las rutas de archivos funcionen independientemente del
-# directorio desde donde se ejecute el script
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # =============================================================================
+# FUNCIÓN: ip_to_int
+# =============================================================================
+def ip_to_int(ip):
+    try:
+        return struct.unpack("!I", socket.inet_aton(ip))[0]
+    except socket.error:
+        return 0
+
+
+# =============================================================================
 # CLASE: ComunicadorIDS
-# Patrón: Observer / Signal-Slot de Qt
-# Propósito: Desacoplar el motor IDS (ids.py) de la interfaz gráfica (interfasc.py)
-# mediante señales de Qt que cruzan hilos de forma thread-safe
 # =============================================================================
 class ComunicadorIDS(QObject):
-    # pyqtSignal(list): Señal que transporta una lista con los datos del evento detectado
-    # Formato esperado: [timestamp, ip_src, ip_dst, puerto, protocolo, flag, tipo_final]
     nuevo_evento = pyqtSignal(list)
-
-    # pyqtSignal(list): Señal que transporta datos de un bloqueo de IP [ip, accion, duracion]
     nuevo_bloqueo = pyqtSignal(list)
-
-    # pyqtSignal(str): Señal que transporta el resumen en texto de cada paquete capturado
-    # Se usa para el panel "Tráfico en Vivo" de la interfaz
     nuevo_trafico = pyqtSignal(str)
+    actualizacion_dashboard = pyqtSignal(dict) # Para enviar métricas al dashboard PyQt
 
-# Instancia global del comunicador — actúa como bus de mensajes entre módulos
 comunicador = ComunicadorIDS()
 
 
 # =============================================================================
 # VARIABLES GLOBALES DE ESTADO Y CONFIGURACIÓN
 # =============================================================================
-
-# Bandera booleana que controla si el sniffer está activo
 sniffing_activo = False
-
-# Bandera para habilitar/deshabilitar el modo IPS (Respuesta Activa)
 ips_activo = False
-
-# Referencia global al objeto AsyncSniffer para poder detenerlo posteriormente
+modo_ips_autonomo = False # True = Bloquea, False = Semi-Autónomo (alerta)
 sniffer: AsyncSniffer = None
 
-# --- UMBRALES DE DETECCIÓN (CONFIGURABLES DESDE UI) ---
-# Número de paquetes SYN en 500ms para declarar SYN Flood
-# Ajustado a 20 para redes pequeñas/pruebas (antes 100)
-THRESHOLD_SYN_FLOOD  = 20
+# --- UMBRALES BASE DE DETECCIÓN ---
+BASE_THRESHOLD_SYN_FLOOD  = 50    
+BASE_THRESHOLD_DDOS       = 500   
+BASE_PORT_SCAN_THRESHOLD  = 40    
+BASE_THRESHOLD_UDP_FLOOD  = 500   
+TIEMPO_ENTRE_ALERTAS = 30    
 
-# Número de paquetes hacia un destino en 1s para declarar DDoS
-# Ajustado a 100 para redes pequeñas/pruebas (antes 1000)
-THRESHOLD_DDOS       = 100
+# --- VARIABLES PARA EWMA (UMBRALES DINÁMICOS) ---
+ewma_pps = 0.0
+alpha_ewma = 0.1
+_pkts_ultimo_segundo = 0
 
-# Número de puertos únicos desde una IP para declarar Port Scan
-# Ajustado a 15 para detectar escaneos rápidos sin ser tan permisivo (antes 50)
-PORT_SCAN_THRESHOLD  = 15
-
-# Número de paquetes UDP hacia un destino en 1s para declarar UDP Flood
-# Ajustado a 200 para redes pequeñas/pruebas (antes 2000)
-THRESHOLD_UDP_FLOOD  = 200
-
-# Tiempo mínimo en segundos entre alertas de la misma IP (anti-spam)
-TIEMPO_ENTRE_ALERTAS = 2
+def calcular_umbral_dinamico(base, max_mult=10.0):
+    # Base baseline de paquetes por segundo considerados 'normales' para la red
+    baseline_esperado = 200.0
+    if ewma_pps <= baseline_esperado:
+        return base
+    
+    factor = ewma_pps / baseline_esperado
+    factor = min(factor, max_mult) # Evitar que suba indefinidamente
+    return int(base * factor)
 
 # --- PROTOCOLOS DE DISCOVERY (RUIDO) ---
-# Puertos que generan gran volumen de tráfico legítimo por descubrimiento automático
-# 5353: mDNS, 5355: LLMNR, 1900: SSDP, 137/138: NetBIOS
 DISCOVERY_PORTS = {5353, 5355, 1900, 137, 138}
 
-# IP local del sistema — se detecta automáticamente para evitar auto-detección falsa
+# IP local del sistema
 try:
     from scapy.all import get_if_addr
     MI_IP = get_if_addr(conf.iface)
@@ -110,138 +111,89 @@ except Exception:
     MI_IP = "127.0.0.1"
 
 # --- ESTRUCTURAS DE DATOS DE DETECCIÓN ---
-# defaultdict(list): Para cada IP, lista de timestamps de paquetes recientes
 paquetes_por_ip    = defaultdict(list)
-
-# defaultdict(set): Para cada IP origen, conjunto de puertos destino únicos tocados
 puertos_por_ip     = defaultdict(set)
-
-# deque con maxlen: Buffer circular de los últimos 100 eventos detectados
-# maxlen evita crecimiento ilimitado en memoria
 eventos_detectados = deque(maxlen=100)
-
-# Contador de advertencias acumuladas por IP origen
 advertencias_cont  = defaultdict(int)
-
-# Diccionario que registra el último timestamp de alerta por IP
-# Permite implementar el throttle (TIEMPO_ENTRE_ALERTAS)
 ultimo_ataque_por_ip = {}
 
-
-# =============================================================================
-# WHITELIST: IPs y rangos de red de confianza
-# Las IPs en estas listas serán ignoradas por los detectores de ataques
-# Evita falsos positivos con CDNs (Cloudflare, Akamai), servicios propios, etc.
-# =============================================================================
-IPS_CONFIABLES = {
-    "192.168.0.15",
-    "192.168.0.17",
-    "8.243.166.74",
-    "172.67.9.68",
-    "104.22.1.235",  # Cloudflare
-    "2.22.20.72",    # Akamai
+# Métricas para el Dashboard
+metricas_trafico = {
+    'total_pkts': 0,
+    'aulas_pkts': 0,
+    'biblioteca_pkts': 0,
+    'externos_pkts': 0,
+    'riesgo_global': 0.0
 }
 
-# Rangos CIDR de redes confiables (UNIVERSIDAD)
-# Se restauran las redes privadas para evitar falsos positivos internos masivos
+
+# =============================================================================
+# WHITELIST: IPs y rangos de red de confianza — AMPLIADO PARA UNIPAZ
+# =============================================================================
+IPS_CONFIABLES = {
+    "8.8.8.8", "8.8.4.4", "1.1.1.1", "9.9.9.9", "208.67.222.222",
+}
+
 RANGOS_CONFIABLES = [
-    ipaddress.ip_network('10.0.0.0/8'),         # Red Privada Corporativa / Universidad
-    ipaddress.ip_network('172.16.0.0/12'),      # Red Privada Corporativa / Universidad
-    ipaddress.ip_network('192.168.0.0/16'),     # Red Privada Doméstica / Laboratorios
-    ipaddress.ip_network('20.110.205.0/24'),    # Azure / Microsoft
-    ipaddress.ip_network('40.0.0.0/8'),         # Azure
-    ipaddress.ip_network('52.0.0.0/8'),         # AWS
-    ipaddress.ip_network('54.0.0.0/8'),         # AWS
-    ipaddress.ip_network('104.16.0.0/12'),      # Cloudflare
-    ipaddress.ip_network('140.82.0.0/16'),      # GitHub
-    ipaddress.ip_network('143.204.0.0/16'),     # Amazon CloudFront
-    ipaddress.ip_network('34.192.0.0/12'),      # Google Cloud
-    ipaddress.ip_network('35.192.0.0/12'),      # Google Cloud
-    ipaddress.ip_network('172.217.0.0/16'),     # Google
-    ipaddress.ip_network('2.22.20.0/24'),       # Akamai
-    ipaddress.ip_network('52.178.17.0/24'),     # Microsoft Azure
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('20.0.0.0/11'),       
+    ipaddress.ip_network('40.0.0.0/8'),        
+    ipaddress.ip_network('52.0.0.0/8'),        
+    ipaddress.ip_network('54.0.0.0/8'),        
+    ipaddress.ip_network('104.16.0.0/12'),     
+    ipaddress.ip_network('140.82.0.0/16'),     
+    ipaddress.ip_network('143.204.0.0/16'),    
+    ipaddress.ip_network('172.217.0.0/16'),    
+    ipaddress.ip_network('2.22.20.0/24'),      
+    ipaddress.ip_network('13.107.0.0/16'),     
+    ipaddress.ip_network('52.114.0.0/16'),     
+    ipaddress.ip_network('34.192.0.0/12'),     
+    ipaddress.ip_network('35.192.0.0/12'),     
+    ipaddress.ip_network('142.250.0.0/16'),    
+    ipaddress.ip_network('151.101.0.0/16'),    
 ]
 
-
-# =============================================================================
-# FUNCIÓN: ip_en_rangos
-# Propósito: Verifica si una IP pertenece a algún rango CIDR de la whitelist
-# Parámetros: ip — string con la dirección IP a verificar
-# Retorna: True si la IP está en un rango confiable, False en caso contrario
-# =============================================================================
 def ip_en_rangos(ip: str) -> bool:
     try:
-        # ipaddress.ip_address(): Convierte el string a objeto IPv4Address
         ip_obj = ipaddress.ip_address(ip)
-        # any(): Retorna True si al menos un rango contiene la IP
-        # Evaluación cortocircuitada — se detiene al primer match
         return any(ip_obj in net for net in RANGOS_CONFIABLES)
     except ValueError:
-        # IP con formato inválido — se trata como no confiable
         return False
 
 
 # =============================================================================
-# CARGA DE MODELOS Y ENCODERS DE MACHINE LEARNING
-# Rutas relativas a BASE_DIR para portabilidad del proyecto
-# Cada carga está envuelta en try/except para degradación elegante:
-# si falta un archivo, el sistema sigue funcionando con detección heurística
+# CARGA DE MODELOS V3
 # =============================================================================
-ruta_modelo           = os.path.join(BASE_DIR, 'modelo_ensamble_optimizado.pkl')
-ruta_features         = os.path.join(BASE_DIR, 'features_seleccionadas.pkl')
-ruta_flag_encoder     = os.path.join(BASE_DIR, 'flag_encoder.pkl')
-ruta_protocol_encoder = os.path.join(BASE_DIR, 'protocol_encoder.pkl')
-ruta_tipo_encoder     = os.path.join(BASE_DIR, 'tipo_ataque_encoder.pkl')
+ruta_modelo_v3 = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'pipeline_catboost_v3.pkl')
+ruta_features_v3 = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'selected_features_v3.pkl')
+ruta_label_encoder_v3 = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'label_encoder_v3.pkl')
 
-# joblib.load(): Deserializa el objeto Python desde archivo .pkl
-# Cada bloque try/except permite inicio parcial si algún archivo falta
-try:
-    modelo_ml = joblib.load(ruta_modelo)
-    print("[OK] Modelo de Machine Learning cargado correctamente.")
-except FileNotFoundError:
-    print(f"[X] Error: no se encontró {ruta_modelo}")
-    modelo_ml = None  # El sistema usará solo detección heurística
+modelo_ml = None
+features_seleccionadas = None
+tipo_ataque_encoder = None
 
-try:
-    features_seleccionadas = joblib.load(ruta_features)
-    print("[OK] Características seleccionadas cargadas.")
-except FileNotFoundError:
-    print(f"[X] Error: no se encontró {ruta_features}")
-    features_seleccionadas = None
-
-try:
-    flag_encoder = joblib.load(ruta_flag_encoder)
-    print("[OK] Flag encoder cargado.")
-except FileNotFoundError:
-    print(f"[X] Error: no se encontró {ruta_flag_encoder}")
-    flag_encoder = None
-
-try:
-    protocol_encoder = joblib.load(ruta_protocol_encoder)
-    print("[OK] Protocol encoder cargado.")
-except FileNotFoundError:
-    print(f"[X] Error: no se encontró {ruta_protocol_encoder}")
-    protocol_encoder = None
-
-try:
-    tipo_ataque_encoder = joblib.load(ruta_tipo_encoder)
-    print("[OK] Tipo ataque encoder cargado.")
-except FileNotFoundError:
-    print(f"[X] Error: no se encontró {ruta_tipo_encoder}")
-    tipo_ataque_encoder = None
+if os.path.exists(ruta_modelo_v3) and os.path.exists(ruta_features_v3) and os.path.exists(ruta_label_encoder_v3):
+    try:
+        modelo_ml = joblib.load(ruta_modelo_v3)
+        features_seleccionadas = joblib.load(ruta_features_v3)
+        tipo_ataque_encoder = joblib.load(ruta_label_encoder_v3)
+        print("[OK] Modelo ML v3 (Flow-based) cargado correctamente.")
+    except Exception as e:
+        print(f"[X] Error cargando modelo v3: {e}")
+        modelo_ml = None
+else:
+    print("[!] No se encontró modelo ML v3. Se usará solo detección heurística.")
 
 
 # =============================================================================
-# BASE DE DATOS SQLite — Persistencia estructurada de ataques detectados
-# check_same_thread=False: Permite acceso desde múltiples hilos (necesario
-# porque los detectores corren en el hilo del sniffer)
+# BASE DE DATOS SQLite
 # =============================================================================
 ruta_bd = os.path.join(BASE_DIR, 'intrusiones.db')
 conn   = sqlite3.connect(ruta_bd, check_same_thread=False)
 cursor = conn.cursor()
 
-# Crea la tabla si no existe (idempotente gracias a IF NOT EXISTS)
-# AUTOINCREMENT: genera ID único automáticamente para cada registro
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS ataques (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,7 +205,6 @@ cursor.execute('''
     )
 ''')
 
-# Tabla para registro histórico de bloqueos realizados por el IPS
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS bloqueos (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,175 +212,74 @@ cursor.execute('''
         ip_src     TEXT,
         tipo_ataque TEXT,
         duracion   INTEGER,
-        estado     TEXT  -- 'ACTIVO' o 'EXPIRADO'
+        estado     TEXT
     )
 ''')
-conn.commit()  # Persiste el esquema en el archivo .db
+conn.commit()
 
 
-# =============================================================================
-# FUNCIÓN: _enviar_alerta_async
-# Propósito: Envía alertas de Telegram en un hilo daemon independiente
-# Motivo: Las peticiones HTTP pueden tardar 1-5 segundos; ejecutarlas en el
-# hilo del sniffer bloquearía la captura de paquetes durante ese tiempo
-# daemon=True: El hilo se termina automáticamente cuando cierra el proceso principal
-# =============================================================================
 def _enviar_alerta_async(mensaje: str):
     Thread(target=lambda: enviar_alerta(mensaje), daemon=True).start()
 
-
 # =============================================================================
-# FUNCIÓN: preprocesar_datos
-# Propósito: Transforma atributos de red al vector numérico que espera el modelo
-# Nota: Esta función es complementaria a la de CEREBRO.PY — usa hash() en lugar
-# de ip_to_int() porque opera en tiempo real sin los encoders de IP
+# FUNCIÓN DE PREDICCIÓN ML (CALLBACK DE FLUJOS_RED)
 # =============================================================================
-def preprocesar_datos(ip_src, ip_dst, puerto, protocolo, flag):
-    # Codifica flag — si no está en el vocabulario del encoder, usa -1
-    if flag_encoder and flag in flag_encoder.classes_:
-        flag_encoded = flag_encoder.transform([flag])[0]
-    else:
-        flag_encoded = -1  # Valor de fallback para valores desconocidos
-
-    # Codifica protocolo — mismo criterio de fallback
-    if protocol_encoder and protocolo in protocol_encoder.classes_:
-        protocolo_encoded = protocol_encoder.transform([protocolo])[0]
-    else:
-        protocolo_encoded = -1
-
-    # hash(): Convierte la IP string a entero de forma determinista en la sesión
-    # % (10**8): Limita el valor a 8 dígitos para evitar overflow en el modelo
-    datos = {
-        "ip_src":         hash(ip_src),
-        "ip_dst":         hash(ip_dst),
-        "puerto":         puerto,
-        "protocolo_tcp":  1 if protocolo == 'TCP' else 0,  # Feature binaria
-        "flag":           flag_encoded,
-        "protocolo_num":  protocolo_encoded
-    }
-
-    # Ordena los valores según el orden exacto de las features del modelo entrenado
-    if features_seleccionadas:
-        return [datos.get(f, 0) for f in features_seleccionadas]
-    return list(datos.values())
-
-
-# =============================================================================
-# FUNCIÓN: clasificar_ataque_ml
-# Propósito: Usa el modelo ML para clasificar el tipo de ataque con probabilidad
-# Retorna: Tupla (tipo_str, confianza) — el tipo predicho y su probabilidad
-# Incluye logs de depuración detallados para diagnóstico del modelo
-# =============================================================================
-def clasificar_ataque_ml(ip_src, ip_dst, puerto, protocolo, flag):
-    print("\n" + "="*60)
-    print("🔍 DEBUG clasificar_ataque_ml INICIADO")
-    print("="*60)
-
-    # Verificación de componentes: si alguno es None, retorna "Desconocido"
-    # Permite degradación elegante cuando los modelos no están disponibles
-    if modelo_ml is None or features_seleccionadas is None or tipo_ataque_encoder is None:
-        return "Desconocido", 0.0
-
+def on_flow_ready(ip_src, ip_dst, features_dict):
+    """
+    Este callback es llamado por flujos_red.py cuando un flujo expira/se completa.
+    """
+    if modelo_ml is None or features_seleccionadas is None:
+        return
+        
     try:
-        import pandas as pd
-
-        # pd.Timestamp.now().hour: Extrae la hora actual como feature temporal
-        hora = pd.Timestamp.now().hour
-
-        # hash() % (10**8): Convierte IPs a enteros de 8 dígitos de forma reproducible
-        src_ip_int = hash(str(ip_src)) % (10**8)
-        dst_ip_int = hash(str(ip_dst)) % (10**8)
-
-        # Codificación de protocolo y flag con fallback a 0
-        protocolo_encoded = protocol_encoder.transform([protocolo])[0] \
-            if protocol_encoder and protocolo in protocol_encoder.classes_ else 0
-        flag_encoded = flag_encoder.transform([flag])[0] \
-            if flag_encoder and flag in flag_encoder.classes_ else 0
-
-        # Convertir puerto a entero. Si es "Múltiples", usar 0.
-        try:
-            puerto_int = int(puerto)
-        except (ValueError, TypeError):
-            puerto_int = 0
-
-        # Construye DataFrame con las mismas columnas usadas en CEREBRO.PY
-        # El modelo espera exactamente estos nombres de columna en este orden
-        df_entrada = pd.DataFrame({
-            'src_ip_int':        [src_ip_int],
-            'dst_ip_int':        [dst_ip_int],
-            'dst_port':          [puerto_int],
-            'protocol_encoded':  [protocolo_encoded],
-            'flag_encoded':      [flag_encoded],
-            'hour':              [hora]
-        })
-
-        # .predict(): Retorna la clase predicha como entero codificado
-        tipo_pred = modelo_ml.predict(df_entrada)[0]
-
-        # .predict_proba(): Retorna probabilidades para cada clase
-        # .max(): La probabilidad más alta es la confianza de la predicción
-        probs     = modelo_ml.predict_proba(df_entrada)[0]
-        confianza = probs.max()
-
-        # inverse_transform(): Convierte el entero predicho de vuelta al nombre original
-        try:
-            tipo_str = tipo_ataque_encoder.inverse_transform([tipo_pred])[0]
-        except ValueError:
-            # Si el modelo predice una clase que el encoder no conoce (ej. 9)
-            tipo_str = f"Anomalía Tipo {tipo_pred}"
-
-        return tipo_str, confianza
-
+        row = [features_dict.get(f, 0) for f in features_seleccionadas]
+        df_in = pd.DataFrame([row], columns=features_seleccionadas)
+        
+        pred_idx = modelo_ml.predict(df_in)[0]
+        if isinstance(pred_idx, (list, np.ndarray)):
+            pred_idx = pred_idx[0]
+            
+        probs = modelo_ml.predict_proba(df_in)[0]
+        confianza = float(np.max(probs))
+        
+        tipo_str = tipo_ataque_encoder.inverse_transform([pred_idx])[0]
+        
+        # Actualizar riesgo global en dashboard
+        if tipo_str != 'Normal':
+            metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza * 10))
+            guardar_ataque(ip_src, tipo_str, "TCP/UDP", features_dict.get('Dst Port', 0), ip_dst, flag="N/A", es_ml_puro=True, confianza_ml=confianza)
+        else:
+            metricas_trafico['riesgo_global'] = max(0.0, metricas_trafico['riesgo_global'] - 0.5)
+            
     except Exception as e:
-        print(f"[X] Advertencia en ML Predict: {e}")
-        return "Desconocido", 0.0
+        print(f"[X] Advertencia en ML Predict Flow: {e}")
+
+# Instanciamos el tracker global
+flow_tracker = FlowTracker(on_flow_ready)
 
 
 # =============================================================================
 # FUNCIÓN: guardar_ataque
-# Propósito: Orquestador central — coordina todas las acciones ante un ataque:
-#   1. Throttle anti-spam por IP
-#   2. Clasificación ML opcional
-#   3. Persistencia en SQLite
-#   4. Persistencia en CSV (dataset)
-#   5. Emisión de señal a la interfaz
-#   6. Notificación Telegram asíncrona
 # =============================================================================
-def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA", flag="N/A", usar_ml=True):
-    # Ignora ataques que provienen de la IP local del sistema
+def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA", flag="N/A", es_ml_puro=False, confianza_ml=0.0):
     if ip_src == MI_IP:
         return
 
-    # THROTTLE: Evita múltiples alertas de la misma IP en menos de TIEMPO_ENTRE_ALERTAS segundos
-    # Previene spam de notificaciones durante ataques sostenidos
+    # THROTTLE
     ahora = time.time()
     if ahora - ultimo_ataque_por_ip.get(ip_src, 0) < TIEMPO_ENTRE_ALERTAS:
         return
     ultimo_ataque_por_ip[ip_src] = ahora
-    advertencias_cont[ip_src] += 1  # Incrementa contador de advertencias por IP
+    advertencias_cont[ip_src] += 1
 
-    timestamp = time.ctime()  # Timestamp legible: "Mon Jun 10 14:23:01 2024"
+    timestamp = time.ctime()
 
-    # Clasificación ML: ahora se ejecuta SIEMPRE que usar_ml=True
-    # (antes dependía de ips_activo, lo que impedía clasificación sin IPS)
-    if usar_ml and modelo_ml is not None:
-        pred_ml, confianza = clasificar_ataque_ml(ip_src, ip_dst, puerto, protocolo, flag)
-        
-        # Solo confiamos en el ML si la probabilidad es ALTA (>= 70%)
-        # Si tiene < 70%, es mejor confiar en la regla Heurística que sí lo detectó con seguridad
-        if pred_ml and pred_ml != "Normal" and confianza >= 0.70:
-            tipo_final = f"{pred_ml} (ML: {confianza*100:.1f}%)"
-        else:
-            tipo_final = f"{tipo_ataque} (Heurística)"
-            
-        # Si ML es confiable, se usa su probabilidad; sino asume alta severidad por caer en regla heurística
-        prob_str = f"probablemente" if confianza < 0.70 else f"seguridad {confianza*100:.1f}%"
+    if es_ml_puro:
+        tipo_final = f"{tipo_ataque} (ML: {confianza_ml*100:.1f}%)"
     else:
         tipo_final = f"{tipo_ataque} (Heurística)"
-        prob_str = "detectado por regla"
-        mensaje_ml = "📊 Confianza ML: N/A"
 
-    # Construye el mensaje de alerta para Telegram con emojis para visibilidad
+    # Mensaje de alerta
     mensaje = (
         f"SISTEMA DE INTRUSIÓN:\n"
         f"ALERT [IDS] {tipo_final} detectado\n"
@@ -439,147 +289,142 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
         f"IP Destino: {ip_dst}\n"
     )
 
-    # Persistencia en SQLite: registro estructurado para consultas SQL posteriores
+    # Persistencia en SQLite
     try:
         cursor.execute('''
             INSERT INTO ataques (timestamp, tipo_ataque, ip_src, protocolo, puerto)
             VALUES (?, ?, ?, ?, ?)
         ''', (timestamp, tipo_final, ip_src, protocolo, puerto))
-        # ? son placeholders paramétricos que previenen SQL Injection en la propia BD
         conn.commit()
     except Exception as e:
-        print(f"[X] Error guardando en SQLite: {e}")
+        pass
 
-    # Persistencia en CSV: para retroalimentación del modelo ML con datos reales
-    try:
-        guardar_evento_en_dataset(ip_src, ip_dst, puerto, protocolo, flag, tipo_final, tipo_ataque)
-    except Exception as e:
-        print(f"[X] Error al guardar evento en dataset: {e}")
-
-    # Emite señal Qt con los datos del evento para actualizar la tabla de la interfaz
-    # La señal cruza el hilo del sniffer al hilo de la UI de forma thread-safe
+    # Emitir señal Qt
     evento = [timestamp, ip_src, ip_dst, puerto, protocolo, flag, tipo_final]
     eventos_detectados.append(evento)
     comunicador.nuevo_evento.emit(evento)
 
-    # Envía alerta a Telegram en hilo separado para no bloquear la captura
+    # Alerta Telegram
     try:
         _enviar_alerta_async(mensaje)
     except Exception as e:
-        print(f"[X] No se pudo lanzar alerta a Telegram: {e}")
+        pass
 
     # --- LÓGICA DE RESPUESTA ACTIVA (IPS) ---
     if ips_activo:
-        # Calcula severidad basada en tipo de ataque
         t_lower = tipo_final.lower()
-        es_critico = "exploit" in t_lower or "sql" in t_lower or "flood" in t_lower or "ddos" in t_lower or "escaneo" in t_lower
+        es_critico = "exploit" in t_lower or "sql" in t_lower or "flood" in t_lower or "ddos" in t_lower or "escaneo" in t_lower or "scan" in t_lower or "bruteforce" in t_lower
 
+        severidad_ips = "ALTA"
         if "exploit" in t_lower or "sql" in t_lower:
             severidad_ips = "CRITICA"
-        elif "flood" in t_lower or "ddos" in t_lower:
-            severidad_ips = "ALTA"
-        elif "escaneo" in t_lower or "scan" in t_lower:
-            severidad_ips = "MEDIA"
-        else:
-            severidad_ips = "ALTA"
 
-        # Criterio de bloqueo:
-        # Si la decisión final fue tomada por ML (está en el label), exigimos 70% de confianza.
-        # Si la decisión final fue por Heurística (porque ML estuvo por debajo del 50% o falló),
-        # entonces confiamos en la severidad de la regla heurística y bloqueamos.
         puede_bloquear = False
         if es_critico:
-            if "(ml:" in t_lower:
-                if confianza >= 0.70:
+            if es_ml_puro:
+                if confianza_ml >= 0.70:
                     puede_bloquear = True
             else:
-                # Cayó en Heurística pura
                 puede_bloquear = True
 
         if puede_bloquear:
             print(f"ALERT [IPS] Criterios de bloqueo cumplidos para {ip_src} | Tipo: {tipo_ataque} | Severidad: {severidad_ips}")
-            
-            # Intenta bloquear la IP en el firewall (requiere admin)
-            duracion = 60
-            bloqueo_real = False
-            try:
-                bloqueo_real = respuesta_activa.bloquear_ip(ip_src, duracion)
-                if not bloqueo_real:
-                    print(f"[X] IPS FALLIDO: El bloqueo de {ip_src} no se ejecutó. ¿Ejecutó como Administrador?")
-            except Exception as e:
-                print(f"[!] Bloqueo en firewall no disponible: {e}")
 
-            # Registra en la base de datos local (siempre, independiente del firewall)
+            duracion = 24 # 24 horas por defecto en MikroTik
+            bloqueo_real = False
+            
+            if modo_ips_autonomo:
+                try:
+                    # Intento de bloqueo vía MikroTik Core
+                    bloqueo_real = mikrotik_api.bloquear_ip_mikrotik(ip_src, duracion_horas=duracion)
+                except Exception as e:
+                    print(f"[!] Bloqueo MikroTik fallido: {e}")
+            else:
+                print(f"[*] Modo Semi-Autónomo activo. Bloqueo de {ip_src} omitido (Solo Alerta).")
+
+            estado_bd = 'ACTIVO' if bloqueo_real else 'SIMULADO/SEMI'
             try:
-                estado_bd = 'ACTIVO' if bloqueo_real else 'SIMULADO'
                 cursor.execute('''
                     INSERT INTO bloqueos (timestamp, ip_src, tipo_ataque, duracion, estado)
                     VALUES (?, ?, ?, ?, ?)
                 ''', (timestamp, ip_src, tipo_final, duracion, estado_bd))
                 conn.commit()
-            except Exception as e:
-                print(f"[X] Error guardando bloqueo en SQLite: {e}")
-            
-            # Emite señal a la interfaz SIEMPRE (para que se vea en la tabla IPS)
-            accion = "Bloqueo real" if bloqueo_real else "Bloqueo simulado"
+            except Exception:
+                pass
+
+            accion = "Bloqueo real (MikroTik)" if bloqueo_real else "Alerta Semi-Autónoma"
             comunicador.nuevo_bloqueo.emit([ip_src, accion, duracion, tipo_ataque, severidad_ips])
 
 
-
-
-import time
+# =============================================================================
+# FUNCIÓN: mostrar_paquete y Métricas Dashboard
+# =============================================================================
 _ultimo_tiempo_emision = 0
 
-# =============================================================================
-# FUNCIÓN: mostrar_paquete
-# Propósito: Genera resumen textual del paquete y lo emite a la interfaz
-# =============================================================================
-def mostrar_paquete(packet):
-    global _ultimo_tiempo_emision
-    # Se elimina el print() para evitar lag fatal en consola
+def procesar_metricas(packet):
+    metricas_trafico['total_pkts'] += 1
     
+    # VLAN Stripping Analysis (802.1Q)
+    if packet.haslayer(scapy.Dot1Q):
+        vlan_id = packet[scapy.Dot1Q].vlan
+        # Suponiendo IDs ficticios: 10 Aulas, 20 Biblioteca, 30 Externos
+        if vlan_id == 10:
+            metricas_trafico['aulas_pkts'] += 1
+        elif vlan_id == 20:
+            metricas_trafico['biblioteca_pkts'] += 1
+        else:
+            metricas_trafico['externos_pkts'] += 1
+    else:
+        # Sin VLAN asume red externa / por defecto
+        metricas_trafico['externos_pkts'] += 1
+            
+    # Emitir métricas al dashboard cada 1 segundo
+    global _ultimo_tiempo_emision, _pkts_ultimo_segundo, ewma_pps
+    _pkts_ultimo_segundo += 1
     current_time = time.time()
-    # Emitir señal como máximo 10 veces por segundo para no ahogar la UI
-    if current_time - _ultimo_tiempo_emision > 0.1:
+    
+    if current_time - _ultimo_tiempo_emision > 1.0:
+        # Actualización EWMA
+        if ewma_pps == 0.0:
+            ewma_pps = _pkts_ultimo_segundo
+        else:
+            ewma_pps = alpha_ewma * _pkts_ultimo_segundo + (1 - alpha_ewma) * ewma_pps
+            
+        comunicador.actualizacion_dashboard.emit(metricas_trafico.copy())
+        
+        # Reset para contar paquetes por segundo y no acumulativo
+        metricas_trafico['aulas_pkts'] = 0
+        metricas_trafico['biblioteca_pkts'] = 0
+        metricas_trafico['externos_pkts'] = 0
+        
         resumen = packet.summary()
         comunicador.nuevo_trafico.emit(resumen)
         _ultimo_tiempo_emision = current_time
+        _pkts_ultimo_segundo = 0
 
 
 # =============================================================================
-# DETECTORES DE ATAQUES — Cada función analiza un tipo específico de amenaza
+# DETECTORES DE ATAQUES (HEURÍSTICA DE RESPALDO)
 # =============================================================================
 
-# --- DETECTOR 1: SYN FLOOD ---
-# Patrón: Una IP envía >1000 paquetes TCP SYN en 500ms
-# SYN sin ACK de respuesta agota la tabla de conexiones half-open del servidor
 def detectar_syn_flood(packet):
-    # haslayer(TCP): Verifica si el paquete tiene capa TCP
-    # flags == 'S': Solo flag SYN activa (inicio de conexión sin completar)
     if packet.haslayer(scapy.TCP) and str(packet[scapy.TCP].flags) == 'S':
         ip_src  = packet[scapy.IP].src
         ip_dst  = packet[scapy.IP].dst
-        puerto  = packet[scapy.TCP].dport  # Puerto de destino del ataque
+        puerto  = packet[scapy.TCP].dport
         t       = time.time()
 
-        # Ventana deslizante de 500ms: agrega timestamp y limpia los viejos
         paquetes_por_ip[ip_src].append(t)
         paquetes_por_ip[ip_src] = [ts for ts in paquetes_por_ip[ip_src] if t - ts <= 0.5]
 
-        # Si supera el umbral en la ventana → alerta
-        if len(paquetes_por_ip[ip_src]) > THRESHOLD_SYN_FLOOD:
+        if len(paquetes_por_ip[ip_src]) > calcular_umbral_dinamico(BASE_THRESHOLD_SYN_FLOOD):
             guardar_ataque(ip_src, "SYN Flood", 'TCP', puerto, ip_dst, flag=str(packet[scapy.TCP].flags))
 
-
-# --- DETECTOR 2: DDoS DISTRIBUIDO ---
-# Patrón: >2000 paquetes llegan a la misma IP destino en 1 segundo
-# Se cuenta por IP destino (no origen) para detectar tráfico convergente
 def detectar_ddos(packet):
     if packet.haslayer(scapy.IP):
         ip_dst   = packet[scapy.IP].dst
         ip_src   = packet[scapy.IP].src
-        
-        # Determina puerto y protocolo
+
         if packet.haslayer(scapy.TCP):
             puerto = packet[scapy.TCP].dport
             protocolo = 'TCP'
@@ -590,77 +435,55 @@ def detectar_ddos(packet):
             puerto = 0
             protocolo = 'OTRO'
 
-        # --- FILTROS DE RUIDO ---
         if puerto in DISCOVERY_PORTS:
-            return  # Ignora mDNS, SSDP, etc.
+            return
         if protocolo == 'UDP' and puerto == 0:
             return
 
         t = time.time()
         paquetes_por_ip[ip_dst].append(t)
-        # Ventana de 1 segundo para medir volumen de tráfico hacia el destino
         paquetes_por_ip[ip_dst] = [ts for ts in paquetes_por_ip[ip_dst] if t - ts <= 1]
 
-        # Si ya se detectó un UDP Flood (más específico), no disparamos DDoS genérico
-        # Esto evita la duplicidad de alertas en la interfaz
-        if len(paquetes_por_ip[ip_dst]) > THRESHOLD_DDOS:
-            if protocolo == 'UDP' and len(paquetes_por_ip[ip_dst]) > THRESHOLD_UDP_FLOOD:
-                return # Dejamos que lo maneje detectar_udp_flood
+        umbral_ddos = calcular_umbral_dinamico(BASE_THRESHOLD_DDOS)
+        if len(paquetes_por_ip[ip_dst]) > umbral_ddos:
+            if protocolo == 'UDP' and len(paquetes_por_ip[ip_dst]) > calcular_umbral_dinamico(BASE_THRESHOLD_UDP_FLOOD):
+                return
             guardar_ataque(ip_src, "DDoS Distribuido", protocolo, puerto, ip_dst)
 
-
 def detectar_escaneo_puertos(packet):
-    """
-    Detecta escaneo de puertos TCP y UDP. 
-    Se activa cuando una IP toca más de PORT_SCAN_THRESHOLD puertos únicos.
-    Cubre: SYN Scan (-sS), Connect Scan (-sT), NULL, FIN, XMAS y UDP Scan (-sU).
-    """
     if not packet.haslayer(scapy.IP):
         return
 
     ip_src = packet[scapy.IP].src
     ip_dst = packet[scapy.IP].dst
 
-    # 1. Detección TCP (Cualquier intento de conexión o flags inusuales)
     if packet.haslayer(scapy.TCP):
         flags = str(packet[scapy.TCP].flags)
         puerto = packet[scapy.TCP].dport
-        # Consideramos 'intento' cualquier flag que no sea solo ACK (tráfico establecido)
         if flags != 'A':
             puertos_por_ip[ip_src].add(f"TCP:{puerto}")
 
-    # 2. Detección UDP 
     elif packet.haslayer(scapy.UDP):
         puerto = packet[scapy.UDP].dport
-        # Omitimos puertos de discovery para no ensuciar el contador de escaneo
         if puerto not in DISCOVERY_PORTS:
             puertos_por_ip[ip_src].add(f"UDP:{puerto}")
 
-    # Evaluación de Umbral
-    if len(puertos_por_ip[ip_src]) > PORT_SCAN_THRESHOLD:
-        tipo = "Escaneo de Puertos"
-        # Reiniciamos parcialmente para no inundar, pero mantenemos registro para bloqueo persistente
-        guardar_ataque(ip_src, tipo, "TCP/UDP", "Múltiples", ip_dst)
-        # Limpieza ligera para permitir redetección si el bloqueo falla
-        if len(puertos_por_ip[ip_src]) > PORT_SCAN_THRESHOLD + 20:
+    umbral_scan = calcular_umbral_dinamico(BASE_PORT_SCAN_THRESHOLD)
+    if len(puertos_por_ip[ip_src]) > umbral_scan:
+        guardar_ataque(ip_src, "Escaneo de Puertos", "TCP/UDP", "Múltiples", ip_dst)
+        if len(puertos_por_ip[ip_src]) > umbral_scan + 20:
              puertos_por_ip[ip_src].clear()
 
-
-# --- DETECTOR 4: EXPLOITS ---
-# Patrón: Conexiones TCP a puertos vulnerables conocidos desde IPs no confiables
-# Solo flags SYN o SYN-ACK (intentos de conexión, no tráfico establecido)
 def detectar_exploit(packet):
     if not packet.haslayer(scapy.IP):
         return
 
     ip_src = packet[scapy.IP].src
-    # Whitelist: ignora IPs y rangos conocidos para evitar falsos positivos
     if ip_src in IPS_CONFIABLES or ip_en_rangos(ip_src):
         return
 
     ip_dst    = packet[scapy.IP].dst
-    protocolo = 'TCP' if packet.haslayer(scapy.TCP) else \
-                'UDP' if packet.haslayer(scapy.UDP) else 'OTRO'
+    protocolo = 'TCP' if packet.haslayer(scapy.TCP) else 'UDP' if packet.haslayer(scapy.UDP) else 'OTRO'
 
     if protocolo not in {'TCP', 'UDP'}:
         return
@@ -671,21 +494,13 @@ def detectar_exploit(packet):
     if puerto == 0:
         return
 
-    # Puertos históricamente explotados — CVEs documentados para cada uno:
-    # 135/139/445: SMB/RPC (EternalBlue, WannaCry), 3389: RDP (BlueKeep),
-    # 5900: VNC, 21: FTP, 22: SSH, 23: Telnet, 69: TFTP
     PUERTOS_EXPLOIT = {135, 139, 445, 3389, 5900, 21, 22, 23, 69}
 
     if puerto in PUERTOS_EXPLOIT:
-        # Solo alerta en SYN o SYN-ACK — filtra tráfico legítimo establecido (ACK, PSH, etc.)
         if protocolo == 'TCP' and flag not in ['S', 'SA']:
             return
         guardar_ataque(ip_src, "Posible Exploit", protocolo, puerto, ip_dst, flag=flag)
 
-
-# --- DETECTOR 5: SQL INJECTION ---
-# Patrón: Payload HTTP/TCP contiene patrones SQL maliciosos
-# Analiza la carga útil del paquete (capa Raw de Scapy) con regex
 def detectar_sql_injection(packet):
     if packet.haslayer(scapy.Raw):
         try:
@@ -693,10 +508,8 @@ def detectar_sql_injection(packet):
             if ip_src in IPS_CONFIABLES or ip_en_rangos(ip_src):
                 return
 
-            # Raw.load: bytes del payload — .decode(errors='ignore') descarta bytes no-UTF8
             carga = packet[scapy.Raw].load.decode(errors='ignore')
 
-            # Filtros de calidad: solo texto ASCII de longitud razonable
             if not carga.isascii() or len(carga) > 1000:
                 return
 
@@ -704,74 +517,74 @@ def detectar_sql_injection(packet):
             if puerto == 0 or puerto > 65535:
                 return
 
-            # Lista de exclusión: parámetros HTTP legítimos que contienen palabras clave SQL
-            # sin ser maliciosos (ej: "order=desc" es navegación normal, no SQLi)
-            exclusiones = [
-                "order=desc", "mode=debug", "file=", "page=", "limit=",
-                "search=", "token=", "session=", "csrf", "user-agent", "referer",
-                "accept-encoding", "connection", "content-length", "host"
-            ]
+            exclusiones = ["order=desc", "session=", "csrf", "user-agent", "host"]
             if any(excl in carga.lower() for excl in exclusiones):
                 return
 
-            # Regex multi-patrón para detectar técnicas comunes de SQL Injection:
-            # - Palabras clave SQL + comentarios (-- # ; /**/)
-            # - OR 1=1 (bypass de autenticación)
-            # - UNION SELECT (extracción de datos)
-            # - EXEC xp_* (ejecución de stored procedures)
-            # - WAITFOR DELAY / SLEEP (inyección de tiempo ciego)
             sql_pattern = re.compile(
-                r"(?i)(\b(select|union|insert|update|delete|drop|alter|create|exec|execute|cast|declare|grant|revoke)\b"
-                r".?(--|#|;|/\|\*/|@@|char\(|nchar\(|varchar\(|nvarchar\()|"
+                r"(?i)(\b(select|union|insert|update|delete|drop|alter|exec|cast)\b"
+                r".?(--|#|;|/\|\*/)|"
                 r"('(\s)or(\s)\d+=\d+)|"
-                r"(\bunion\b.*\bselect\b)|"
-                r"(\bexec\b(\s|\+)+(s|x)p\w+)|"
-                r"(;?\s*--)|"
-                r"(\bwaitfor\b\s+delay\b)|"
-                r"(sleep\(\d+\))"
-                r")"
+                r"(\bunion\b.*\bselect\b))"
             )
             if sql_pattern.search(carga):
                 ip_dst = packet[scapy.IP].dst
-                # usar_ml=False: El payload ya fue analizado; no necesita clasificación ML
-                guardar_ataque(ip_src, "SQL Injection", "TCP", puerto, ip_dst, usar_ml=False)
-        except Exception as e:
-            print(f"[X] Error en SQLi: {e}")
+                guardar_ataque(ip_src, "SQL Injection", "TCP", puerto, ip_dst)
+        except Exception:
+            pass
 
-
-# --- DETECTOR 6: UDP FLOOD ---
-# Patrón: >1000 paquetes UDP hacia el mismo destino en 1 segundo
-# Variante volumétrica del DDoS usando protocolo UDP (sin handshake)
 def detectar_udp_flood(packet):
     if packet.haslayer(scapy.UDP):
         ip_dst    = packet[scapy.IP].dst
         ip_src    = packet[scapy.IP].src
         puerto    = packet[scapy.UDP].dport
 
-        # --- FILTROS DE RUIDO ---
         if puerto in DISCOVERY_PORTS:
-            return # Evita falsos positivos por mDNS/SSDP en redes densas
+            return
 
         t = time.time()
         paquetes_por_ip[ip_dst].append(t)
         paquetes_por_ip[ip_dst] = [ts for ts in paquetes_por_ip[ip_dst] if t - ts <= 1]
 
-        if len(paquetes_por_ip[ip_dst]) > THRESHOLD_UDP_FLOOD:
+        if len(paquetes_por_ip[ip_dst]) > calcular_umbral_dinamico(BASE_THRESHOLD_UDP_FLOOD):
             guardar_ataque(ip_src, "UDP Flood", 'UDP', puerto, ip_dst)
 
 
 # =============================================================================
 # FUNCIÓN: procesar_paquete
-# Propósito: Callback principal del sniffer — se ejecuta por cada paquete capturado
-# Encadena todos los detectores sobre el mismo paquete
-# El try/except global evita que un error en un detector colapse el sniffer completo
 # =============================================================================
 def procesar_paquete(packet):
     try:
-        mostrar_paquete(packet)  # Emite resumen a la interfaz
+        procesar_metricas(packet)
 
-        # Solo procesa paquetes con capa IP (descarta tramas ARP, etc.)
         if packet.haslayer(scapy.IP):
+            ip_src = packet[scapy.IP].src
+            ip_dst = packet[scapy.IP].dst
+            packet_len = len(packet)
+            timestamp = packet.time
+            
+            protocolo = 'OTRO'
+            puerto_src = 0
+            puerto_dst = 0
+            tcp_flags = None
+            
+            if packet.haslayer(scapy.TCP):
+                protocolo = 'TCP'
+                puerto_src = packet[scapy.TCP].sport
+                puerto_dst = packet[scapy.TCP].dport
+                tcp_flags = str(packet[scapy.TCP].flags)
+            elif packet.haslayer(scapy.UDP):
+                protocolo = 'UDP'
+                puerto_src = packet[scapy.UDP].sport
+                puerto_dst = packet[scapy.UDP].dport
+
+            # Alimentar el FlowTracker para ML
+            flow_tracker.procesar_paquete(
+                ip_src, ip_dst, puerto_src, puerto_dst, 
+                protocolo, packet_len, tcp_flags, timestamp
+            )
+
+            # Heurística de respaldo (inmediata)
             detectar_syn_flood(packet)
             detectar_ddos(packet)
             detectar_escaneo_puertos(packet)
@@ -783,71 +596,37 @@ def procesar_paquete(packet):
 
 
 # =============================================================================
-# FUNCIÓN: iniciar_monitoreo
-# Propósito: Arranca el AsyncSniffer en un hilo propio sin bloquear la UI
-# Parámetros:
-#   iface — Nombre de la interfaz de red (ej: "Ethernet", "Wi-Fi")
-#            Si es None, Scapy usa la interfaz por defecto del sistema
+# CONTROL DEL SNIFFER
 # =============================================================================
 def iniciar_monitoreo(iface=None):
     global sniffing_activo, sniffer
     if sniffing_activo:
-        print("🔍 Sniffing ya está activo.")
         return
 
     sniffing_activo = True
-
-    # AsyncSniffer: Captura paquetes en un hilo interno de Scapy
-    # prn=procesar_paquete: Callback ejecutado por cada paquete capturado
-    # store=False: No acumula paquetes en memoria (evita memory leak)
-    # filter=None: Sin filtro BPF — captura todo el tráfico (puede cambiarse)
-    sniffer = AsyncSniffer(
-        iface=iface,
-        prn=procesar_paquete,
-        store=False,
-        filter=None
-    )
+    sniffer = AsyncSniffer(iface=iface, prn=procesar_paquete, store=False, filter=None)
     try:
-        sniffer.start()  # Inicia el hilo interno de captura
+        sniffer.start()
         print("[OK] AsyncSniffer arrancado correctamente.")
     except Exception as e:
         print(f"[X] Error iniciando AsyncSniffer: {e}")
-        sniffing_activo = False  # Revierte el estado si falla el inicio
+        sniffing_activo = False
 
-
-# =============================================================================
-# FUNCIÓN: detener_monitoreo
-# Propósito: Para el AsyncSniffer de forma limpia liberando el socket de captura
-# =============================================================================
 def detener_monitoreo():
     global sniffing_activo, sniffer
     if not sniffing_activo:
-        print("⏹ Sniffing no estaba activo.")
         return
-
     sniffing_activo = False
     try:
         if sniffer is not None:
-            sniffer.stop()  # Envía señal de parada al hilo interno de Scapy
-            sniffer = None  # Libera la referencia para permitir garbage collection
-            print("[OK] AsyncSniffer detenido correctamente.")
+            sniffer.stop()
+            sniffer = None
+            print("[OK] AsyncSniffer detenido.")
     except Exception as e:
-        print(f"[X] Error deteniendo AsyncSniffer: {e}")
+        pass
 
-
-# =============================================================================
-# BLOQUE DE PRUEBA DIRECTA
-# =============================================================================
 if __name__ == "__main__":
-    print("🔍 Ejecutando ids.py directamente para prueba.")
     iniciar_monitoreo()
-    print("[WAIT] Deja correr 10 segundos para verificar tráfico…")
-    time.sleep(10)  # Captura tráfico durante 10 segundos
-    print("⏹ Deteniendo monitoreo de prueba.")
+    time.sleep(10)
     detener_monitoreo()
-    conn.close()  # Cierra la conexión SQLite limpiamente
-    print("[OK] ids.py finalizado.")
-
-# =============================================================================
-# FIN DEL SCRIPT — ids.py
-# =============================================================================
+    conn.close()

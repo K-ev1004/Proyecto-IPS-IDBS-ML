@@ -38,17 +38,16 @@ from matplotlib import cm
 from matplotlib import colors as mcolors
 
 # Módulo interno
-from abuseipdb_module import GestorAbuseIPDB
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 try:
     import ids
-    import respuesta_activa
+    import mikrotik_api
 except Exception as _e:
     ids = None
-    respuesta_activa = None
-    logging.error("No se pudo importar 'ids' o 'respuesta_activa'. Detalle: %s", _e)
+    mikrotik_api = None
+    logging.error("No se pudo importar 'ids' o 'mikrotik_api'. Detalle: %s", _e)
 
 style.use('dark_background')
 
@@ -151,10 +150,10 @@ class IDSInterface(FluentWindow):
         if ids:
             try:
                 # Carga los valores de QSettings, con fallback a los valores originales de ids.py
-                ids.THRESHOLD_SYN_FLOOD = int(self.settings.value("thresh_syn", ids.THRESHOLD_SYN_FLOOD))
-                ids.THRESHOLD_DDOS = int(self.settings.value("thresh_ddos", ids.THRESHOLD_DDOS))
-                ids.THRESHOLD_UDP_FLOOD = int(self.settings.value("thresh_udp", ids.THRESHOLD_UDP_FLOOD))
-                ids.PORT_SCAN_THRESHOLD = int(self.settings.value("thresh_scan", ids.PORT_SCAN_THRESHOLD))
+                ids.BASE_THRESHOLD_SYN_FLOOD = int(self.settings.value("thresh_syn", ids.BASE_THRESHOLD_SYN_FLOOD))
+                ids.BASE_THRESHOLD_DDOS = int(self.settings.value("thresh_ddos", ids.BASE_THRESHOLD_DDOS))
+                ids.BASE_THRESHOLD_UDP_FLOOD = int(self.settings.value("thresh_udp", ids.BASE_THRESHOLD_UDP_FLOOD))
+                ids.BASE_PORT_SCAN_THRESHOLD = int(self.settings.value("thresh_scan", ids.BASE_PORT_SCAN_THRESHOLD))
             except Exception as e:
                 logging.error(f"Error cargando preferencias: {e}")
 
@@ -174,8 +173,6 @@ class IDSInterface(FluentWindow):
             InfoBar.error(title=titulo, content=mensaje, position=InfoBarPosition.TOP, duration=5000, parent=self)
 
     def setup_styles(self):
-        self.api_key_abuse = "31b904b493a50236fd7bd08163d01b562ce7a5127dc3968ef589d808232696ce3ea1b68e695323d4"
-        self.gestor_abuse = GestorAbuseIPDB(self.api_key_abuse)
         self.ips_a_verificar_cola = set()
 
     def aplicar_estilos_badges(self):
@@ -388,7 +385,7 @@ class IDSInterface(FluentWindow):
         controls_layout.addWidget(self.spin_manual_time)
 
         btn_block_manual = TransparentPushButton(FIF.PIN, "Bloquear Manual")
-        btn_block_manual.clicked.connect(self.bloquear_ip_manual_ui)
+        btn_block_manual.clicked.connect(self._bloquear_desde_input)
         controls_layout.addWidget(btn_block_manual)
 
         controls_layout.addStretch()
@@ -404,6 +401,9 @@ class IDSInterface(FluentWindow):
         layout.addLayout(controls_layout)
 
         self._bloqueos_data = []
+        self.historial_aulas = deque(maxlen=60)
+        self.historial_biblio = deque(maxlen=60)
+        self.historial_externos = deque(maxlen=60)
 
     def setup_stats_page(self):
         layout = QVBoxLayout(self.page_stats)
@@ -425,11 +425,13 @@ class IDSInterface(FluentWindow):
         kpi_layout = QHBoxLayout()
         kpi_layout.setSpacing(15)
         
+        self.kpi_riesgo = TitleLabel("0.0%")
         self.kpi_eventos = TitleLabel("0")
         self.kpi_ips = TitleLabel("0")
         self.kpi_bloqueos = TitleLabel("0")
         
-        for title, value_lbl in [("Total de Eventos", self.kpi_eventos), 
+        for title, value_lbl in [("Riesgo Global (CatBoost)", self.kpi_riesgo), 
+                                 ("Eventos Detectados", self.kpi_eventos),
                                  ("IPs Atacantes", self.kpi_ips), 
                                  ("Bloqueos Activos", self.kpi_bloqueos)]:
             card = SimpleCardWidget()
@@ -458,16 +460,15 @@ class IDSInterface(FluentWindow):
         self.ax_pie = self.fig_pie.add_subplot(111)
         pie_layout.addWidget(self.canvas_pie)
         mid_layout.addWidget(pie_card)
-        mid_layout.setStretchFactor(pie_card, 6)
         
         explicacion_tooltip = (
             "<b>Glosario de Amenazas (Machine Learning):</b><br><br>"
-            "<b>• Inyección SQL (1):</b> Intentos de manipulación de BD mediante comandos SQL maliciosos.<br>"
-            "<b>• Posible Exploit (4):</b> Intentos de conexión a puertos críticos (SMB, RDP, SSH) para explotar fallos.<br>"
-            "<b>• SYN Flood (5):</b> Saturación de recursos mediante peticiones de conexión TCP incompletas.<br>"
-            "<b>• UDP Flood (6):</b> Inundación de la red con paquetes UDP masivos sin estado.<br>"
-            "<b>• Anomalía Tipo 9 (Otros):</b> Agrupación de tráfico normal y ataques de baja frecuencia (DDoS, Port Scan).<br><br>"
-            "<i>Nota: El número entre paréntesis representa el identificador de clase del modelo de IA.</i>"
+            "<b>• Tráfico Normal (0):</b> Conexiones regulares sin intención maliciosa.<br>"
+            "<b>• Escaneo de Puertos (1):</b> Intentos de descubrir puertos abiertos y vulnerabilidades.<br>"
+            "<b>• Fuerza Bruta (2):</b> Intentos repetitivos para adivinar contraseñas (ej. SSH/FTP).<br>"
+            "<b>• DoS / Inundación (3):</b> Ataques de Denegación de Servicio para saturar el servidor.<br>"
+            "<b>• DDoS (4):</b> Denegación de Servicio Distribuida utilizando múltiples IPs.<br>"
+            "<b>• Anomalía Tipo 9:</b> Comportamiento de red inusual que no encaja en patrones conocidos."
         )
         self.canvas_pie.setToolTip(explicacion_tooltip)
         self.canvas_pie.setToolTipDuration(10000)
@@ -488,7 +489,6 @@ class IDSInterface(FluentWindow):
         self.table_top_ips.setBorderRadius(4)
         top_ips_layout.addWidget(self.table_top_ips)
         mid_layout.addWidget(top_ips_card)
-        mid_layout.setStretchFactor(top_ips_card, 4)
         
         layout.addLayout(mid_layout)
 
@@ -575,42 +575,54 @@ class IDSInterface(FluentWindow):
 
         # SYN Flood
         box_syn = QVBoxLayout()
-        box_syn.addWidget(BodyLabel("SYN Flood (pkts/0.5s):"))
+        syn_card = SimpleCardWidget()
+        syn_layout = QVBoxLayout(syn_card)
+        syn_layout.addWidget(BodyLabel("SYN Flood (pkts/0.5s):"))
         self.spin_syn = SpinBox()
-        self.spin_syn.setRange(5, 5000)
-        self.spin_syn.setValue(ids.THRESHOLD_SYN_FLOOD)
-        self.spin_syn.valueChanged.connect(lambda v: self._update_threshold('thresh_syn', 'THRESHOLD_SYN_FLOOD', v))
-        box_syn.addWidget(self.spin_syn)
+        self.spin_syn.setRange(10, 5000)
+        self.spin_syn.setValue(ids.BASE_THRESHOLD_SYN_FLOOD)
+        self.spin_syn.valueChanged.connect(lambda v: self._update_threshold('thresh_syn', 'BASE_THRESHOLD_SYN_FLOOD', v))
+        syn_layout.addWidget(self.spin_syn)
+        box_syn.addWidget(syn_card)
         umbrales_layout.addLayout(box_syn)
 
         # DDoS
         box_ddos = QVBoxLayout()
-        box_ddos.addWidget(BodyLabel("DDoS (pkts/1s):"))
+        ddos_card = SimpleCardWidget()
+        ddos_layout = QVBoxLayout(ddos_card)
+        ddos_layout.addWidget(BodyLabel("DDoS (pkts/1s):"))
         self.spin_ddos = SpinBox()
-        self.spin_ddos.setRange(10, 10000)
-        self.spin_ddos.setValue(ids.THRESHOLD_DDOS)
-        self.spin_ddos.valueChanged.connect(lambda v: self._update_threshold('thresh_ddos', 'THRESHOLD_DDOS', v))
-        box_ddos.addWidget(self.spin_ddos)
+        self.spin_ddos.setRange(100, 10000)
+        self.spin_ddos.setValue(ids.BASE_THRESHOLD_DDOS)
+        self.spin_ddos.valueChanged.connect(lambda v: self._update_threshold('thresh_ddos', 'BASE_THRESHOLD_DDOS', v))
+        ddos_layout.addWidget(self.spin_ddos)
+        box_ddos.addWidget(ddos_card)
         umbrales_layout.addLayout(box_ddos)
 
         # UDP Flood
         box_udp = QVBoxLayout()
-        box_udp.addWidget(BodyLabel("UDP Flood (pkts/1s):"))
+        udp_card = SimpleCardWidget()
+        udp_layout = QVBoxLayout(udp_card)
+        udp_layout.addWidget(BodyLabel("UDP Flood (pkts/1s):"))
         self.spin_udp = SpinBox()
-        self.spin_udp.setRange(10, 10000)
-        self.spin_udp.setValue(ids.THRESHOLD_UDP_FLOOD)
-        self.spin_udp.valueChanged.connect(lambda v: self._update_threshold('thresh_udp', 'THRESHOLD_UDP_FLOOD', v))
-        box_udp.addWidget(self.spin_udp)
+        self.spin_udp.setRange(100, 10000)
+        self.spin_udp.setValue(ids.BASE_THRESHOLD_UDP_FLOOD)
+        self.spin_udp.valueChanged.connect(lambda v: self._update_threshold('thresh_udp', 'BASE_THRESHOLD_UDP_FLOOD', v))
+        udp_layout.addWidget(self.spin_udp)
+        box_udp.addWidget(udp_card)
         umbrales_layout.addLayout(box_udp)
 
         # Port Scan
         box_scan = QVBoxLayout()
-        box_scan.addWidget(BodyLabel("Escaneo (puertos/IP):"))
+        scan_card = SimpleCardWidget()
+        scan_layout = QVBoxLayout(scan_card)
+        scan_layout.addWidget(BodyLabel("Escaneo (puertos/IP):"))
         self.spin_scan = SpinBox()
         self.spin_scan.setRange(5, 500)
-        self.spin_scan.setValue(ids.PORT_SCAN_THRESHOLD)
-        self.spin_scan.valueChanged.connect(lambda v: self._update_threshold('thresh_scan', 'PORT_SCAN_THRESHOLD', v))
-        box_scan.addWidget(self.spin_scan)
+        self.spin_scan.setValue(ids.BASE_PORT_SCAN_THRESHOLD)
+        self.spin_scan.valueChanged.connect(lambda v: self._update_threshold('thresh_scan', 'BASE_PORT_SCAN_THRESHOLD', v))
+        scan_layout.addWidget(self.spin_scan)
+        box_scan.addWidget(scan_card)
         umbrales_layout.addLayout(box_scan)
 
         layout.addLayout(umbrales_layout)
@@ -637,15 +649,12 @@ class IDSInterface(FluentWindow):
         self.boton_evidencia = TransparentPushButton("Generar Evidencia Gráfica")
         self.boton_evidencia.clicked.connect(self.generar_evidencia)
         
-        self.boton_verificar_abuse = TransparentPushButton("Verificar Base de Datos AbuseIPDB")
-        self.boton_verificar_abuse.clicked.connect(self.verificar_ips_abuse)
-        
         self.boton_tema = TransparentPushButton("Alternar Apariencia (Dark/Light)")
         self.boton_tema.clicked.connect(self.cambiar_tema)
 
         for b in [self.boton_iniciar, self.boton_detener, self.boton_limpiar,
                   self.boton_exportar, self.boton_evidencia,
-                  self.boton_verificar_abuse, self.boton_tema]:
+                  self.boton_tema]:
             acciones_layout.addWidget(b)
             
         acciones_layout.addStretch()
@@ -689,6 +698,7 @@ class IDSInterface(FluentWindow):
                 ids.comunicador.nuevo_evento.connect(self.agregar_evento_)
                 ids.comunicador.nuevo_trafico.connect(self.agregar_trafico_)
                 ids.comunicador.nuevo_bloqueo.connect(self.actualizar_tabla_bloqueos_signal)
+                ids.comunicador.actualizacion_dashboard.connect(self.actualizar_dashboard_en_vivo)
             except Exception as e:
                 logging.error(f"No se pudieron conectar señales de 'ids': {e}")
 
@@ -846,6 +856,7 @@ class IDSInterface(FluentWindow):
         self.lbl_bloqueos_expirados.setText(f"Expirados: {expirados}")
 
     def desbloquear_ip_manual(self):
+        """Desbloquea la IP seleccionada en la tabla via MikroTik."""
         items = self.table_bloqueos.selectedItems()
         if not items:
             self.mostrar_mensaje("Info", "Seleccione una fila para desbloquear.", "info")
@@ -857,7 +868,10 @@ class IDSInterface(FluentWindow):
             return
         ip = ip_item.text()
 
-        if respuesta_activa and respuesta_activa.desbloquear_ip(ip):
+        self.mostrar_mensaje("Desbloqueo IPS", f"Intentando desbloquear {ip} en MikroTik...", "info")
+
+        if mikrotik_api and mikrotik_api.desbloquear_ip_mikrotik(ip):
+            # Actualizar UI
             estado_item = self.table_bloqueos.item(row, 5)
             tiempo_item = self.table_bloqueos.item(row, 6)
             if estado_item:
@@ -866,28 +880,32 @@ class IDSInterface(FluentWindow):
             if tiempo_item:
                 tiempo_item.setText("—")
             for entry in self._bloqueos_data:
-                if entry['row'] == row:
+                if entry.get('row') == row:
                     entry['estado'] = 'Desbloqueado'
             self._actualizar_resumen_bloqueos()
-            self.mostrar_mensaje("Desbloqueo IPS", f"IP Desbloqueada manualmente: {ip}", "success")
+            self.mostrar_mensaje("Desbloqueo IPS", f"IP Desbloqueada: {ip}", "success")
         else:
-            self.mostrar_mensaje("Error", f"No se pudo desbloquear la IP {ip}", "error")
+            self.mostrar_mensaje("Error", f"No se pudo desbloquear la IP {ip}.", "error")
 
-    def bloquear_ip_manual_ui(self):
+    def _bloquear_desde_input(self):
+        """Toma la IP y minutos de los campos en la UI y ejecuta el bloqueo."""
         ip = self.input_manual_ip.text().strip()
         minutos = self.spin_manual_time.value()
-        
+
         if not ip or not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
-            self.mostrar_mensaje("Error de Validación", "Ingrese una dirección IPv4 válida.", "warning")
+            self.mostrar_mensaje("Error", "Ingrese una dirección IPv4 válida.", "warning")
             return
-            
-        if respuesta_activa and respuesta_activa.bloquear_ip(ip, minutos):
+
+        self.bloquear_ip_manual(ip, minutos)
+        self.input_manual_ip.clear()
+
+    def bloquear_ip_manual(self, ip, minutos=30):
+        if mikrotik_api and mikrotik_api.bloquear_ip_mikrotik(ip, duracion_horas=round(minutos/60, 2)):
+            self.mostrar_mensaje("IPS Activo", f"Regla de MikroTik añadida para bloquear {ip} por {minutos} min", "success")
             self.actualizar_tabla_bloqueos_signal([ip, "Bloqueo manual", minutos, "Prevención Manual", "ALTA"])
-            self.input_manual_ip.clear()
-            self.mostrar_mensaje("Bloqueo IPS", f"IP {ip} bloqueada manualmente por {minutos} minutos.", "success")
         else:
             self.mostrar_mensaje("Error", f"No se pudo ejecutar la regla de bloqueo para {ip}.", "error")
-            
+
     def limpiar_ips_expirados(self):
         rows_to_remove = []
         for i in reversed(range(self.table_bloqueos.rowCount())):
@@ -1079,13 +1097,10 @@ class IDSInterface(FluentWindow):
             tipo   = self.table.item(row, 7).text() if self.table.item(row, 7) else ""
 
             evidencia = [f"<li>Protocolo/Flag: <b>{proto} / {flag}</b></li>"]
-            t_low = tipo.lower()
-            if "syn flood"   in t_low: evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
-            if "ddos"        in t_low: evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
-            if "escaneo"     in t_low: evidencia.append("<li>Indicador: múltiples puertos probados desde una misma IP</li>")
-            if "sql"         in t_low: evidencia.append("<li>Indicador: patrón de payload compatible con SQLi</li>")
-            if "exploit"     in t_low: evidencia.append("<li>Indicador: conexión a puertos críticos vulnerables (SMB/RDP/SSH)</li>")
-            if "udp flood"   in t_low: evidencia.append("<li>Indicador: saturación mediante paquetes UDP masivos</li>")
+            if "syn flood"   in tipo.lower(): evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
+            if "ddos"        in tipo.lower(): evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
+            if "escaneo"     in tipo.lower(): evidencia.append("<li>Indicador: múltiples puertos probados desde una misma IP</li>")
+            if "sql"         in tipo.lower(): evidencia.append("<li>Indicador: patrón de payload compatible con SQLi</li>")
 
             color_sev = self._compute_severity(tipo)[1]
             txt_color = "#e1dfdd" if self.modo_oscuro else "#333333"
@@ -1282,6 +1297,17 @@ class IDSInterface(FluentWindow):
         
         self.mostrar_mensaje("Limpieza", "Interfaz y registros en memoria limpiados", "info")
 
+    def actualizar_dashboard_en_vivo(self, metricas):
+        try:
+            if hasattr(self, 'kpi_riesgo'):
+                self.kpi_riesgo.setText(f"{metricas.get('riesgo_global', 0.0):.1f}%")
+            if hasattr(self, 'historial_aulas'):
+                self.historial_aulas.append(metricas.get('aulas_pkts', 0))
+                self.historial_biblio.append(metricas.get('biblioteca_pkts', 0))
+                self.historial_externos.append(metricas.get('externos_pkts', 0))
+        except Exception as e:
+            logging.error(f"Error en actualizar_dashboard_en_vivo: {e}")
+
     def actualizar_grafico_auto(self):
         if self.graph_update_pending:
             return
@@ -1323,17 +1349,28 @@ class IDSInterface(FluentWindow):
                 
                 cnt = Counter(tipos_finales)
                 if cnt:
-                    labels = list(cnt.keys())
-                    values = list(cnt.values())
+                    top_items = cnt.most_common(4)
+                    otros_count = sum(cnt.values()) - sum(count for item, count in top_items)
+                    
+                    labels = [item for item, count in top_items]
+                    values = [count for item, count in top_items]
+                    
+                    if otros_count > 0:
+                        labels.append("Otros")
+                        values.append(otros_count)
+
                     colors = colors_for_labels(labels)
-                    self.ax_pie.pie(
-                        values, labels=labels, colors=colors,
-                        autopct='%1.1f%%',
+                    wedges, texts, autotexts = self.ax_pie.pie(
+                        values, colors=colors,
+                        autopct='%1.0f%%',
                         radius=1.0,
-                        textprops={'color': text_color, 'fontsize': 9, 'weight': 'bold'}
+                        textprops={'color': text_color, 'fontsize': 8, 'weight': 'bold'},
+                        pctdistance=0.7
                     )
+                    self.ax_pie.legend(wedges, labels, loc="center left", bbox_to_anchor=(0.9, 0.5), facecolor=grid_color, edgecolor="none", labelcolor=text_color, fontsize=8)
+            
             self.ax_pie.set_title("Distribución de Amenazas", color=text_color, fontsize=11, pad=15, weight='bold')
-            self.fig_pie.tight_layout(pad=2.0)
+            self.fig_pie.subplots_adjust(left=0.0, right=0.65, top=0.85, bottom=0.1)
             self.canvas_pie.draw_idle()
 
             # 3. Top IPs Table
@@ -1346,15 +1383,32 @@ class IDSInterface(FluentWindow):
                 self.table_top_ips.setItem(i, 0, item_ip)
                 self.table_top_ips.setItem(i, 1, item_count)
 
-            # 4. Line Chart
+            # 4. Gráfico Multi-línea: Segmentación de Red (VLAN)
             self.fig_line.patch.set_facecolor('none')
             self.ax_line.clear()
             self.ax_line.set_facecolor('none')
-            x_data = list(range(len(self.history_pps)))
-            self.ax_line.plot(x_data, list(self.history_pps), color=accent_color, linewidth=2.5, marker='o', markersize=4, label="Paquetes / Seg")
-            self.ax_line.fill_between(x_data, list(self.history_pps), color=accent_color, alpha=0.15)
-            self.ax_line.set_title("Carga de Red en Tiempo Real (Últimos 60s)", color=text_color, fontsize=11, pad=15, weight='bold')
+            
+            h_aulas = list(self.historial_aulas)
+            h_biblio = list(self.historial_biblio)
+            h_ext = list(self.historial_externos)
+            max_len = max(len(h_aulas), len(h_biblio), len(h_ext), 1)
+            x_data = list(range(max_len))
+            
+            h_aulas = [0] * (max_len - len(h_aulas)) + h_aulas
+            h_biblio = [0] * (max_len - len(h_biblio)) + h_biblio
+            h_ext = [0] * (max_len - len(h_ext)) + h_ext
+            
+            self.ax_line.plot(x_data, h_aulas, color="#4daafc", linewidth=2.0, label="Aulas")
+            self.ax_line.fill_between(x_data, h_aulas, color="#4daafc", alpha=0.1)
+            self.ax_line.plot(x_data, h_biblio, color="#6ccb5f", linewidth=2.0, label="Biblioteca")
+            self.ax_line.fill_between(x_data, h_biblio, color="#6ccb5f", alpha=0.1)
+            self.ax_line.plot(x_data, h_ext, color="#ff3b30", linewidth=2.0, label="Externos")
+            self.ax_line.fill_between(x_data, h_ext, color="#ff3b30", alpha=0.1)
+            
+            self.ax_line.set_title("Tráfico por Segmentos de Red (Últimos 60s)", color=text_color, fontsize=11, pad=15, weight='bold')
             self.ax_line.tick_params(axis='both', colors=text_color, labelsize=9)
+            self.ax_line.legend(loc="upper left", facecolor=grid_color, edgecolor="none", labelcolor=text_color)
+            
             for spine in self.ax_line.spines.values():
                 spine.set_edgecolor(grid_color)
             self.ax_line.grid(True, linestyle='--', alpha=0.4, color=grid_color)
@@ -1458,8 +1512,6 @@ class IDSInterface(FluentWindow):
 
     def closeEvent(self, event):
         try:
-            self.gestor_abuse.limpiar()
-
             if self.monitoreo_activo:
                 self.detener_monitoreo()
 
@@ -1500,66 +1552,6 @@ class IDSInterface(FluentWindow):
         except:
             return False
 
-    def verificar_ips_abuse(self):
-        ips_encontradas = set()
-
-        try:
-            texto_adv = self.advertencias.toPlainText()
-            if texto_adv:
-                patron_ip = r"\b(?:\d{1,3}\.){3}\d{1,3}\b"
-                for ip in re.findall(patron_ip, texto_adv):
-                    if self._es_ip_externa(ip):
-                        ips_encontradas.add(ip)
-        except Exception as e:
-            logging.error(f"Error extrayendo IPs del warnbox: {e}")
-
-        if not ips_encontradas and hasattr(self, "table"):
-            try:
-                for fila in range(self.table.rowCount()):
-                    for col in (1, 2):
-                        item = self.table.item(fila, col)
-                        if item and item.text().strip():
-                            ip = item.text().strip()
-                            if self._es_ip_externa(ip):
-                                ips_encontradas.add(ip)
-            except Exception as e:
-                logging.error(f"Error extrayendo IPs de la tabla: {e}")
-
-        if not ips_encontradas and self.ips_a_verificar_cola:
-            ips_encontradas = set(self.ips_a_verificar_cola)
-
-        if not ips_encontradas:
-            self.mostrar_mensaje("Verificación", "No se encontraron IPs externas para verificar", "warning")
-            self.ips_a_verificar_cola.clear()
-            return
-
-        ips_lista = list(ips_encontradas)
-        self.mostrar_mensaje("AbuseIPDB", f"Verificando {len(ips_lista)} IPs en AbuseIPDB...", "info")
-
-        self.gestor_abuse.verificar_ips(
-            ips_lista,
-            callback_resultado=self.mostrar_resultado_abuse,
-            callback_error=self.mostrar_error_abuse
-        )
-
-    def mostrar_resultado_abuse(self, resultado):
-        ip      = resultado['ip']
-        score   = resultado['abuse_score']
-        riesgo  = resultado['riesgo']
-        reports = resultado['total_reports']
-        pais    = resultado['pais']
-
-        linea = f"\n🔍 AbuseIPDB | {ip} | Score: {score}% | {riesgo} | Reports: {reports} | {pais}"
-        texto_actual = self.advertencias.toPlainText()
-        self.advertencias.setPlainText(linea + "\n" + texto_actual)
-
-        if "CRÍTICO" in riesgo:
-            self.mostrar_mensaje("Alerta de Riesgo", f"IP CRÍTICA DETECTADA: {ip}", "error")
-
-    def mostrar_error_abuse(self, error_msg):
-        logging.error(f"Error AbuseIPDB: {error_msg}")
-        linea = f"\n[X] AbuseIPDB Error: {error_msg}"
-        self.advertencias.setPlainText(linea + "\n" + self.advertencias.toPlainText())
 
 def configurar_logging():
     logging.basicConfig(

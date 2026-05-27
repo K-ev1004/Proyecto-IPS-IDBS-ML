@@ -1,0 +1,42 @@
+# Base de datos
+intrusiones.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Archivos y carpetas CIC
+CSE-CIC-IDS2018/
+
+# Carpeta de ips ids funcionales de github
+ips-ids funcionales de github/
+
+# Python / Entorno
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+env/
+.venv/
+
+# Evidencias y logs
+evidencia/
+*.log
+logs_bloqueos.txt
+
+# Datasets y Numpy Arrays pesados (>100MB)
+Dataset/
+Dataset_Limpio/
+*.npy
+*.csv
+
+# --- CORRECCIONES AQUÍ ---
+# Ignorar TODA la carpeta de modelos (los .pkl suelen pesar mucho)
+Modelos_Entrenados/
+
+# Carpetas de respaldo y reportes pesados
+Backup_v1/
+catboost_info/
+*.docx
+*.xlsx

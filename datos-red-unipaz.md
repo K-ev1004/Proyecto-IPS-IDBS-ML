@@ -1,3 +1,99 @@
+PROYECTO DE INVESTIGACIÓN:
+SISTEMA IDS/IPS BASADO EN
+MACHINE LEARNING (IPS-IDBS-ML)
+Institución: Instituto Universitario de la Paz (UNIPAZ)
+Foco Tecnológico: Ciberseguridad, Inteligencia Artificial, Detección de Intrusos
+1. OBJETIVO GENERAL
+Implementar y desplegar un sistema IDS/IPS (IPS-IDBS-ML) basado en Machine Learning para
+la detección, análisis estadístico y bloqueo automático de intrusiones en la red institucional de
+UNIPAZ, garantizando su adaptabilidad y rendimiento frente a las condiciones reales de tráfico
+y conectividad de la comunidad universitaria.
+2. ESTADO DEL ARTE Y EVOLUCIÓN TECNOLÓGICA
+La detección de intrusiones en redes ha evolucionado significativamente desde sus orígenes en
+1987, transitando por diversas etapas tecnológicas clave:
+● Sistemas Tradicionales y de Firmas Estáticas:
+○ Zeek (antes Bro, 1995): Enfocado en el monitoreo de seguridad, análisis de tráfico
+de red y generación de logs estructurados.
+○ Snort (1998): IDS/IPS de código abierto basado estrictamente en el cumplimiento
+de reglas.
+○ Suricata (2010): Incorporó soporte multi-hilo, inspección avanzada de protocolos y
+detección combinada basada en firmas y anomalías.
+● Evolución hacia la Inteligencia Artificial: Transición de firmas rígidas hacia modelos de
+IA Supervisada (Random Forest, Redes Neuronales Profundas - DNN) e IA No
+Supervisada (Autoencoders).
+● Tendencia Actual (CatBoost): En la actualidad, el algoritmo CatBoost destaca en el
+estado del arte por su alta velocidad y precisión al clasificar ataques en datasets
+complejos como CIC-IDS2017, superando las capacidades de los firewalls tradicionales y
+compitiendo de manera directa con costosas herramientas comerciales cerradas como
+Cisco o Darktrace.
+3. DISEÑO METODOLÓGICO
+El diseño metodológico del proyecto se gestiona de manera estricta a través de la metodología
+ágil Kanban, permitiendo optimizar el flujo de trabajo continuo y la resolución flexible de tareas
+bajo la siguiente estructura global:
+
+Componente Descripción y Aplicación en el Proyecto
+1. Tipo de Investigación Aplicada Tecnológica: Enfocada en el diseño,
+desarrollo e implementación de un sistema
+funcional y adaptado a las necesidades
+reales de UNIPAZ.
+
+2. Enfoque Híbrido (Mixto) ● Cuantitativo: Medición estadística de la
+precisión del modelo (CatBoost),
+rendimiento del motor de captura (FPS)
+y consumo de recursos (CPU/RAM).
+● Cualitativo: Diagnóstico técnico y
+entrevistas semiestructuradas al
+personal de TI de la universidad para
+evaluar la mitigación de amenazas.
+3. Fuentes de Información ● Primarias: Captura de paquetes en
+tiempo real y logs de tráfico de la red
+interna de UNIPAZ.
+● Secundarias: Datasets académicos de
+ciberseguridad (CIC-IDS2017) y
+literatura científica indexada (IEEE,
+MIST).
+
+4. Población Objeto Infraestructura de red de UNIPAZ NET, la
+cual soporta a una comunidad de
+aproximadamente 2,915 estudiantes y un
+promedio de 1,730 dispositivos conectados
+en horas pico.
+
+5. Materiales y Recursos (Red) Entorno experimental controlado (Red LAN)
+que simula la topología institucional utilizando
+Firewalls, switches y routers MikroTik para
+pruebas de inyección de ataques (DDoS,
+Fuerza Bruta, Escaneo de Puertos) y bloqueo
+automático.
+
+6. Materiales y Recursos (Software) Ecosistema de desarrollo basado en Python
+(librería Scapy para captura de tráfico, PyQt5
+y FluentWidgets para la interfaz gráfica de
+usuario, y algoritmo CatBoost para el motor
+de Machine Learning) ejecutado sobre
+entornos Windows y Linux.
+
+4. CONCLUSIONES
+● Efectividad del Modelo: Se logró implementar con éxito un sistema IDS/IPS basado en
+Machine Learning (CatBoost), alcanzando una alta precisión en la detección de
+
+intrusiones, superando la capacidad de respuesta de los sistemas de firmas estáticas
+tradicionales y demostrando ser una alternativa eficiente y de bajo costo comparada con
+soluciones comerciales.
+● Impacto en la Red Institucional: La integración de este sistema en la red de UNIPAZ
+demostró ser viable, garantizando la adaptabilidad necesaria frente al tráfico real de la
+comunidad universitaria. El sistema no solo detecta, sino que permite el análisis
+estadístico y el bloqueo automático, reduciendo significativamente la exposición a
+vulnerabilidades de red.
+● Validación de la Metodología: El uso de la metodología Kanban permitió una gestión
+ágil y un flujo de desarrollo continuo, facilitando la identificación y corrección inmediata de
+errores durante la implementación del sistema y garantizando el cumplimiento de los
+hitos del proyecto.
+● Alcance Tecnológico: El desarrollo de una interfaz gráfica intuitiva, apoyada en
+herramientas de código abierto (Python, PyQt5, Scapy), permitió democratizar el acceso
+a herramientas de ciberseguridad robustas, cumpliendo con el objetivo de dotar a la
+institución de una capa de protección proactiva y escalable.
+
 # Arquitectura y Flujo de la Red Institucional - UNIPAZ
 
 Este documento detalla la estructura lógica y física de la red de la universidad, basándose en el diagrama técnico oficial provisto por el departamento de soporte de redes (`sistemas@unipaz.edu.co`). La infraestructura sigue un modelo de diseño jerárquico empresarial estructurado en tres capas: **Core (Núcleo)**, **Distribución** y **Acceso**.

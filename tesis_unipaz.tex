@@ -1,0 +1,915 @@
+% ============================================================
+%  IPS-IDBS-ML: SISTEMA DE DETECCIÓN Y BLOQUEO DE INTRUSIONES BASADO EN ML
+%  Instituto Universitario de la Paz (UNIPAZ)
+%  Autor: Kevin Abner Rojas Gomez
+%  Año: 2026
+%  Compilar con: XeLaTeX o pdfLaTeX
+% ============================================================
+
+\documentclass[12pt,letterpaper]{report}
+
+% ------------------- PAQUETES -------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}          % Times New Roman (NTC 1486)
+\usepackage[spanish,es-tabla]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{pdfpages}
+\usepackage{tocloft}
+\usepackage{chngcntr}
+\usepackage{parskip}
+\usepackage{grffile}         % Manejo de espacios en rutas de imágenes
+
+% ------------------- CONFIGURACIÓN DE PÁGINA ---------------
+\geometry{
+  left=4cm,
+  right=2cm,
+  top=3cm,
+  bottom=3cm
+}
+
+\onehalfspacing
+\setlength{\parindent}{1.25cm}
+
+% ------------------- ESTILO DE PÁGINA ----------------------
+\setlength{\headheight}{15.2pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[R]{\thepage}
+\fancyhead[L]{\leftmark}
+\renewcommand{\headrulewidth}{0.5pt}
+\renewcommand{\chaptermark}[1]{\markboth{Capítulo \thechapter.\ #1}{}}
+
+% ------------------- FORMATO DE TÍTULOS --------------------
+\titleformat{\chapter}[block]{\normalfont\bfseries\centering}{}{0pt}{\MakeUppercase}
+\titlespacing*{\chapter}{0pt}{0pt}{20pt}
+
+\titleformat{\section}{\normalfont\bfseries}{}{0pt}{}
+\titlespacing*{\section}{0pt}{12pt}{6pt}
+
+\titleformat{\subsection}{\normalfont\bfseries\itshape}{}{0pt}{}
+\titlespacing*{\subsection}{0pt}{12pt}{6pt}
+
+% ------------------- HIPERVÍNCULOS -------------------------
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue
+}
+
+% ------------------- LISTINGS (CÓDIGO) ---------------------
+\lstdefinestyle{python}{
+  language=Python,
+  basicstyle=\footnotesize\ttfamily,
+  numbers=left,
+  numberstyle=\tiny,
+  frame=single,
+  breaklines=true,
+  showstringspaces=false
+}
+
+% ------------------- INFORMACIÓN DEL DOCUMENTO -------------
+\newcommand{\titulo}{IPS-IDBS-ML: Sistema de Detección y Bloqueo de Intrusiones basado en Machine Learning para la protección de la red institucional del Instituto Universitario de la Paz - UNIPAZ}
+\newcommand{\autor}{Kevin Abner Rojas Gomez}
+\newcommand{\institucion}{Instituto Universitario de la Paz (UNIPAZ)}
+\newcommand{\programa}{Ingeniería de Sistemas}
+\newcommand{\ciudad}{Barrancabermeja, Santander, Colombia}
+\newcommand{\anno}{2026}
+
+% ============================================================
+%                     INICIO DEL DOCUMENTO
+% ============================================================
+\begin{document}
+
+% ============================================================
+%  PORTADA
+% ============================================================
+\begin{titlepage}
+  \begin{center}
+    \vspace*{2cm}
+    %\includegraphics[width=4cm]{unipaz_logo}\\[1cm]
+    \MakeUppercase{\institucion}\\[0.5cm]
+    \MakeUppercase{\programa}\\[0.5cm]
+    \MakeUppercase{\ciudad}\\[2cm]
+    
+    \MakeUppercase{\titulo}\\[2cm]
+    
+    \autor\\[2cm]
+    
+    Trabajo de Grado presentado como requisito parcial\\[0.3cm]
+    para optar al título de Ingeniero de Sistemas\\[2cm]
+    
+    \MakeUppercase{\ciudad}\\[0.3cm]
+    \MakeUppercase{\anno}
+  \end{center}
+\end{titlepage}
+
+% ============================================================
+%  CONTRAPORTADA
+% ============================================================
+\begin{titlepage}
+  \begin{center}
+    \vspace*{2cm}
+    \MakeUppercase{\titulo}\\[2cm]
+    
+    \MakeUppercase{\autor}\\[2cm]
+    
+    Director\\[0.3cm]
+    \rule{6cm}{0.5pt}\\[0.3cm]
+    \MakeUppercase{Nombre del Director}\\
+    \ciudad\\[2cm]
+    
+    \MakeUppercase{\institucion}\\[0.3cm]
+    \MakeUppercase{\programa}\\[0.3cm]
+    \MakeUppercase{\ciudad}\\[0.3cm]
+    \MakeUppercase{\anno}
+  \end{center}
+\end{titlepage}
+
+% ============================================================
+%  NOTA DE ACEPTACIÓN
+% ============================================================
+\newpage
+\thispagestyle{empty}
+\begin{center}
+  \vspace*{3cm}
+  \textbf{NOTA DE ACEPTACIÓN}\\[2cm]
+  \rule{12cm}{0.5pt}\\[1cm]
+  \rule{12cm}{0.5pt}\\[1cm]
+  \rule{12cm}{0.5pt}\\[1cm]
+  \rule{12cm}{0.5pt}\\[3cm]
+  
+  \textbf{Firma del Jurado}\\[2cm]
+  \textbf{Firma del Jurado}\\[2cm]
+  \textbf{Firma del Director}
+\end{center}
+
+% ============================================================
+%  DEDICATORIA (opcional)
+% ============================================================
+\newpage
+\thispagestyle{empty}
+\vspace*{6cm}
+\begin{flushright}
+  \textit{A Dios, por guiar cada paso de este camino.\\
+  A mi familia, por su apoyo incondicional.}
+\end{flushright}
+
+% ============================================================
+%  AGRADECIMIENTOS (opcional)
+% ============================================================
+\newpage
+\thispagestyle{empty}
+\vspace*{3cm}
+\section*{AGRADECIMIENTOS}
+Al Instituto Universitario de la Paz (UNIPAZ) por brindar el espacio y los recursos para el desarrollo de esta investigación.\\
+Al departamento de sistemas de UNIPAZ por la información técnica proporcionada sobre la infraestructura de red institucional.\\
+A todas las personas que contribuyeron directa e indirectamente en la realización de este proyecto.
+
+% ============================================================
+%  TABLA DE CONTENIDO
+% ============================================================
+\newpage
+\tableofcontents
+\newpage
+\listoffigures
+\newpage
+\listoftables
+
+% ============================================================
+%  RESUMEN
+% ============================================================
+\newpage
+\chapter*{RESUMEN}
+\addcontentsline{toc}{chapter}{RESUMEN}
+
+El presente trabajo de grado aborda el diseño e implementación de un Sistema de Detección y Bloqueo de Intrusiones (IPS-IDBS-ML) basado en Machine Learning, específicamente utilizando el algoritmo CatBoost, para la infraestructura de red segmentada del Instituto Universitario de la Paz (UNIPAZ). La institución cuenta con una población estudiantil de aproximadamente 2,915 estudiantes y una concurrencia simultánea de entre 1,100 y 1,750 dispositivos en horas pico, distribuidos en tres nodos principales: Bloque de Aulas, Biblioteca y Salones Externos.
+
+El sistema, denominado \textbf{IPS-IDBS-ML} (IPS-IDBS-ML: Intrusion Prevention System - Intrusion Detection and Blocking System with Machine Learning), integra captura de tráfico en tiempo real mediante Scapy con Npcap en entorno Windows, detección heurística de seis tipos de ataques (SYN Flood, DDoS Distribuido, Port Scanner, Posible Exploit, Inyección SQL y UDP Flood), clasificación mediante un modelo CatBoost con una precisión del 91.9\%, un módulo de respuesta activa (IPS) que bloquea IPs maliciosas vía firewall de Windows y MikroTik RouterOS, y un panel de control SOC (Security Operations Center) en tiempo real con interfaz PyQt5 Fluent Design.
+
+El modelo de Machine Learning fue entrenado con un dataset sintético de 20,000 registros balanceado con SMOTE, seleccionando 22 características mediante SelectKBest. La lógica de decisión híbrida combina la clasificación del ML (con un umbral de confianza del 70\%) con reglas heurísticas para garantizar la detección incluso cuando el modelo presenta baja confianza.
+
+\textbf{Palabras clave:} IDS, IPS, Machine Learning, CatBoost, Ciberseguridad, UNIPAZ, Detección de Intrusiones, Npcap, Scapy, MikroTik.
+
+% ============================================================
+%  INTRODUCCIÓN
+% ============================================================
+\newpage
+\chapter{INTRODUCCIÓN}
+
+La transformación digital en las instituciones educativas ha traído consigo un aumento significativo en la superficie de ataque cibernético. Las universidades, por su naturaleza abierta y su alta densidad de dispositivos conectados, se han convertido en blancos frecuentes de ciberataques como escaneo de puertos, ataques de denegación de servicio (DoS/DDoS), inyecciones SQL y explotación de vulnerabilidades. Según el informe de amenazas cibernéticas de Educause (2024), el sector educativo es uno de los más atacados a nivel global, solo superado por el sector salud y el gubernamental.
+
+La Universidad Popular del Cesar (UNIPAZ), ubicada en Barrancabermeja, Santander, Colombia, cuenta con una población estudiantil de aproximadamente 2,915 estudiantes distribuidos en tres bloques principales (Aulas, Biblioteca y Salones Externos), con una concurrencia simultánea de entre 1,100 y 1,750 dispositivos en horas pico. Su infraestructura de red está segmentada por VLANs y utiliza equipos como firewalls Sophos XGS 3300, routers MikroTik CCR, switches Raisecom y TP-Link Omada, y puntos de acceso UniFi/Ruckus. Sin embargo, la institución carece de un sistema de detección y prevención de intrusiones (IDS/IPS) dedicado que analice el tráfico interno más allá del firewall perimetral.
+
+El presente proyecto propone el desarrollo e implementación del sistema IPS-IDBS-ML, diseñado específicamente para operar en el entorno de red de UNIPAZ. El sistema integra captura de tráfico en tiempo real mediante Scapy con Npcap, detección heurística de seis tipos de ataques, clasificación mediante un modelo CatBoost con precisión del 91.9\%, un módulo de respuesta activa (IPS) que bloquea IPs maliciosas vía firewall de Windows y MikroTik RouterOS, y un panel de control SOC (Security Operations Center) en tiempo real con interfaz PyQt5 Fluent Design.
+
+% ============================================================
+%  PLANTEAMIENTO DEL PROBLEMA
+% ============================================================
+\chapter{PLANTEAMIENTO DEL PROBLEMA}
+
+\section{Contexto Global}
+
+El crecimiento exponencial de las redes académicas y la sofisticación de los ataques de día cero han generado una necesidad crítica de sistemas de detección y prevención de intrusiones en instituciones educativas. Según el ENISA Threat Landscape 2023, el sector educativo figura entre los cinco más atacados a nivel mundial, con un incremento del 67\% en incidentes de ciberseguridad reportados entre 2020 y 2023.
+
+\section{Realidad Institucional en UNIPAZ}
+
+La infraestructura de red del Instituto Universitario de la Paz (UNIPAZ) está compuesta por una topología jerárquica empresarial de tres capas (Core, Distribución y Acceso). En el perímetro cuenta con un Firewall de Nueva Generación Sophos XGS 3300, routers industriales MikroTik Cloud Core (CCR2004 y CCR1009), switches Carrier-Class Raisecom ISCOM S3600, switches de acceso TP-Link Omada SG2428P y puntos de acceso Ubiquiti UniFi 6 LR.
+
+Sin embargo, aunque el firewall perimetral Sophos XGS 3300 es robusto, este opera principalmente mediante firmas tradicionales orientadas al tráfico norte-sur (exterior-interior) y no inspecciona el tráfico este-oeste (interno) entre las VLANs de los diferentes pisos de Aulas, Biblioteca y Salones Externos. Esto crea una ceguera crítica frente a amenazas internas como:
+
+\begin{itemize}
+  \item Escaneos de puertos entre estaciones de trabajo.
+  \item Propagación de malware dentro del campus.
+  \item Intentos de explotación de vulnerabilidades en servidores internos.
+  \item Ataques de denegación de servicio originados desde dispositivos infectados dentro de la misma red.
+  \item Inyecciones SQL dirigidas a bases de datos locales.
+\end{itemize}
+
+\section{Brecha Técnica}
+
+El despliegue de soluciones IDS/IPS comerciales como Cisco Secure Network Analytics o Darktrace representa un costo prohibitivo para la institución, cuyo presupuesto para herramientas de software es de cero pesos colombianos. Por otra parte, las herramientas open source tradicionales como Snort o Suricata presentan limitaciones en entornos Windows, que es la plataforma obligatoria para el despliegue del sistema.
+
+Adicionalmente, existen desafíos técnicos significativos:
+\begin{itemize}
+  \item El riesgo de pérdida de tramas (packet dropping) asociado a la captura en entornos Windows durante horas pico.
+  \item El posible VLAN stripping por parte de drivers comerciales de Windows que eliminan la etiqueta IEEE 802.1Q.
+  \item La necesidad de procesar tráfico en tiempo real con un modelo de Machine Learning que se adapte al data drift propio del tráfico estudiantil.
+\end{itemize}
+
+\section{Pregunta Problema}
+
+¿Es viable técnica y operativamente implementar un sistema de detección y bloqueo de intrusiones (IPS-IDBS-ML) basado en el algoritmo CatBoost, ejecutándose en entorno Windows con captura mediante Npcap y bloqueo automatizado vía API MikroTik RouterOS, para la infraestructura de red segmentada del Instituto Universitario de la Paz (UNIPAZ)?
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{"diagramas/PLANTEAMIENTO DEL PROBLEMA EVIDENCIA DEL PROBLEMA"}
+  \caption{Evidencia del problema: tráfico no inspeccionado entre VLANs internas}
+  \label{fig:problema}
+\end{figure}
+
+% ============================================================
+%  JUSTIFICACIÓN
+% ============================================================
+\chapter{JUSTIFICACIÓN}
+
+\section{Justificación Técnica}
+
+La red de UNIPAZ presenta características que la hacen particularmente vulnerable: alta densidad de dispositivos personales, naturaleza abierta del acceso, recursos limitados para ciberseguridad y manejo de datos sensibles de estudiantes y personal administrativo. Un sistema IDS/IPS basado en Machine Learning ofrece la capacidad de detectar patrones anómalos sin depender exclusivamente de firmas estáticas, adaptándose mediante modelos heurísticos (CatBoost) a las ráfagas de tráfico atípico estudiantil y protegiendo proactivamente la capa de acceso local (Switches TP-Link Omada) antes de comprometer el Core.
+
+El algoritmo CatBoost fue seleccionado por su capacidad nativa para manejar características categóricas (puertos, protocolos) y su soporte de aceleración por GPU mediante CUDA, lo que permite inferencia en tiempo real incluso bajo condiciones de alta concurrencia (1,100 a 1,750 dispositivos simultáneos).
+
+\section{Justificación Económica}
+
+El proyecto demuestra el valor de una solución soberana de costo cero basada enteramente en software libre y open-source: Python, CatBoost, Npcap, Scapy, PyQt5 y RouterOS API. Esto contrasta con las soluciones comerciales que implican costos de licenciamiento anual que pueden superar los 50,000 USD para instituciones educativas. La estación de trabajo de desarrollo (CPU Intel i9-14900KF, 64 GB RAM, RTX 4070 SUPER 12GB) fue proporcionada por el investigador, sin costo para la universidad.
+
+\section{Justificación Académica e Institucional}
+
+El proyecto se alinea con la Línea 8 de investigación institucional: \textit{Aprovechamiento de los recursos potenciales del Magdalena Medio en procesos transdisciplinarios de las ciencias y las ingenierías}. Asimismo, enriquece el repositorio institucional con una solución transdisciplinaria de ingeniería que integra ciberseguridad, inteligencia artificial y redes de telecomunicaciones.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{"diagramas/JUSTIFICACIÓN"}
+  \caption{Dimensiones de la justificación del proyecto}
+  \label{fig:justificacion}
+\end{figure}
+
+% ============================================================
+%  OBJETIVOS
+% ============================================================
+\chapter{OBJETIVOS}
+
+\section{Objetivo General}
+
+Implementar y desplegar un sistema IDS/IPS (IPS-IDBS-ML) basado en Machine Learning para la detección, análisis estadístico y bloqueo automático de intrusiones en la red institucional de UNIPAZ, garantizando su adaptabilidad y rendimiento frente a las condiciones reales de tráfico y conectividad de la comunidad universitaria.
+
+\section{Objetivos Específicos}
+
+\begin{enumerate}
+  \item[\textbf{01.}] \textbf{Diagnóstico:} Realizar el diagnóstico de amenazas y vulnerabilidades en la red institucional.
+  \item[\textbf{02.}] \textbf{Entrenar y Validar:} Entrenar y validar el sistema de detección de intrusos (IDS) utilizando técnicas de Machine Learning.
+  \item[\textbf{03.}] \textbf{Desarrollar e Implementar:} Desarrollar e implementar el sistema de detección y bloqueo automático de intrusiones.
+  \item[\textbf{04.}] \textbf{Evaluar:} Evaluar el funcionamiento del sistema en un entorno real mediante pruebas de monitoreo.
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{"diagramas/objetivos"}
+  \caption{Mapa de objetivos del proyecto}
+  \label{fig:objetivos}
+\end{figure}
+
+% ============================================================
+%  MARCO REFERENCIAL
+% ============================================================
+\chapter{MARCO REFERENCIAL}
+
+\section{Marco Teórico}
+
+\subsection{Sistemas de Detección de Intrusiones (IDS)}
+
+Un Sistema de Detección de Intrusiones (IDS) es una herramienta de seguridad que monitorea el tráfico de red o las actividades del sistema en busca de actividades maliciosas o violaciones de políticas. Según el NIST SP 800-94, los IDS se clasifican en:
+
+\begin{itemize}
+  \item \textbf{NIDS (Network-based IDS):} Monitorean el tráfico de red en tiempo real. Ejemplos: Snort, Suricata.
+  \item \textbf{HIDS (Host-based IDS):} Monitorean actividades en un host específico.
+  \item \textbf{Sistemas Híbridos:} Combinan ambas aproximaciones.
+\end{itemize}
+
+\subsection{Sistemas de Prevención de Intrusiones (IPS)}
+
+Un IPS extiende las capacidades del IDS al añadir la capacidad de bloquear activamente el tráfico malicioso. Puede operar en modo inline (el tráfico pasa a través del sistema) o out-of-line (recibe tráfico espejado y envía comandos de bloqueo a otros dispositivos de red). El presente proyecto implementa un NIPS out-of-line que envía comandos de bloqueo vía SSH/API a los routers MikroTik.
+
+\subsection{Algoritmos de Ensemble: Gradient Boosting}
+
+El Gradient Boosting es una técnica de ensemble learning que construye un modelo predictivo combinando múltiples modelos débiles (generalmente árboles de decisión) de forma secuencial, donde cada nuevo modelo corrige los errores del anterior. CatBoost, desarrollado por Yandex en 2017, es una implementación de Gradient Boosting que maneja de forma nativa características categóricas mediante la técnica \textit{Ordered Target Statistics}, evitando el sobreajuste y mejorando la precisión.
+
+\subsection{Redes Jerárquicas Empresariales}
+
+El modelo de tres capas (Core, Distribución, Acceso) es el estándar en redes empresariales. UNIPAZ implementa este modelo con routers MikroTik en el Core, switches Raisecom en Distribución y switches TP-Link Omada en Acceso, con segmentación VLAN 802.1Q.
+
+\section{Marco Conceptual}
+
+\begin{itemize}
+  \item \textbf{Port Mirroring (SPAN):} Técnica que copia el tráfico de un puerto de switch a otro puerto para su análisis, sin interrumpir el flujo original.
+  \item \textbf{Modo Promiscuo:} Modo de operación de una interfaz de red donde captura todos los paquetes que atraviesan el medio, no solo los dirigidos a su dirección MAC.
+  \item \textbf{IEEE 802.1Q:} Estándar que permite la segmentación de redes mediante etiquetas VLAN insertadas en la trama Ethernet.
+  \item \textbf{Data Drift:} Fenómeno donde la distribución estadística de los datos cambia con el tiempo, afectando el rendimiento de los modelos de Machine Learning.
+  \item \textbf{Falso Positivo:} Alerta generada por el sistema ante tráfico legítimo que es clasificado incorrectamente como malicioso.
+  \item \textbf{Inferencia en Tiempo Real:} Capacidad del modelo ML de clasificar tráfico en el momento de su captura, sin demoras significativas.
+\end{itemize}
+
+\section{Marco Tecnológico y Científico}
+
+\subsection{Equipos de Red de UNIPAZ}
+
+\begin{itemize}
+  \item \textbf{Sophos XGS 3300:} Firewall de nueva generación con inspección profunda de paquetes, control de aplicaciones, inspección SSL y protección contra amenazas. Opera en el perímetro de la red.
+  \item \textbf{MikroTik CCR2004/CCR1009:} Routers Core de la serie Cloud Core Router con procesadores ARM, múltiples interfaces SFP+ y capacidad de manejo de tablas de rutas y firewall a velocidad de línea.
+  \item \textbf{Raisecom ISCOM S3600:} Switch Carrier-Class que centraliza la fibra óptica del nodo principal y distribuye los enlaces troncales hacia los edificios del campus.
+  \item \textbf{TP-Link Omada SG2428P/TL-SG1428PE:} Switches gestionables PoE+ con soporte para VLAN, QoS y port mirroring.
+  \item \textbf{Ubiquiti UniFi 6 LR / Ruckus:} Puntos de acceso Wi-Fi 6 con segmentación VLAN por SSID.
+\end{itemize}
+
+\subsection{CatBoost frente a otras arquitecturas ML}
+
+CatBoost procesa mejor las variables categóricas de red (puertos, protocolos, flags TCP) frente a otras arquitecturas como Random Forest o XGBoost, debido a su técnica \textit{Ordered Target Statistics} que reduce el sesgo de estimación. Estudios recientes (Hwang et al., 2020; Alqahtani et al., 2022) demuestran que CatBoost supera a XGBoost y LightGBM en precisión y velocidad en tareas de clasificación de tráfico de red.
+
+\section{Marco Histórico y Actual}
+
+La ciberseguridad en redes universitarias de la región del Magdalena Medio enfrenta retos significativos: presupuestos limitados, personal de TI reducido y una creciente dependencia de servicios digitales. La transición hacia Wi-Fi 6 (UniFi 6 LR) aumenta la capacidad de conectividad pero también expande la superficie de ataque. En este contexto, herramientas como IPS-IDBS-ML representan una solución accesible y efectiva para instituciones educativas con recursos limitados.
+
+% ============================================================
+%  ESTADO DEL ARTE
+% ============================================================
+\chapter{ESTADO DEL ARTE Y EVOLUCIÓN TECNOLÓGICA}
+
+\section{Sistemas IDS/IPS Tradicionales}
+
+La detección de intrusiones en redes tiene sus orígenes en el trabajo de Dorothy Denning (1987) con el modelo de detección de intrusiones en tiempo real. Desde entonces, han surgido herramientas ampliamente adoptadas:
+
+\begin{itemize}
+  \item \textbf{Zeek} (antes Bro, 1995): Sistema de monitoreo de seguridad enfocado en análisis de tráfico de red y generación de logs estructurados.
+  
+  \item \textbf{Snort} (1998): Sistema IDS/IPS de código abierto basado en reglas, creado por Martin Roesch. Utiliza firmas para detectar patrones de ataque conocidos. Es el estándar de facto en IDS basados en firmas, pero tiene limitaciones frente a ataques desconocidos (zero-day).
+  
+  \item \textbf{Suricata} (2010): Desarrollado por OISF. Soporta multi-hilo, inspección de protocolos y detección basada en firmas y anomalías. Puede utilizar hardware de aceleración como AF\_PACKET y CUDA.
+\end{itemize}
+
+\section{Machine Learning aplicado a la Ciberseguridad}
+
+\begin{itemize}
+  \item \textbf{Random Forest:} Utilizado por Zhang et al. (2021) para clasificación de tráfico malicioso en redes SDN, alcanzando precisiones superiores al 95\% en datasets como CIC-IDS2017.
+  
+  \item \textbf{Redes Neuronales Profundas (DNN):} Vinayakumar et al. (2019) demostraron la efectividad de DNNs para detección de intrusiones a escala, con mejor rendimiento que métodos tradicionales en datasets como NSL-KDD y CIC-IDS2017.
+  
+  \item \textbf{CatBoost:} Desarrollado por Yandex (2017). Estudios recientes muestran que CatBoost supera a XGBoost y LightGBM en precisión y velocidad en tareas de clasificación de tráfico de red.
+  
+  \item \textbf{Autoencoders:} Utilizados para detección de anomalías mediante aprendizaje no supervisado.
+\end{itemize}
+
+\section{Datasets de Referencia}
+
+\begin{itemize}
+  \item \textbf{KDD Cup 1999 / NSL-KDD:} Dataset histórico, útil como línea base.
+  \item \textbf{CIC-IDS2017 / CSE-CIC-IDS2018:} Desarrollados por el Canadian Institute for Cybersecurity (CIC). Contienen tráfico realista con ataques modernos. Son los datasets más utilizados en investigación actual de IDS/ML.
+  \item \textbf{CIC-DDoS2019:} Enfocado específicamente en ataques DDoS actuales.
+\end{itemize}
+
+\section{Soluciones Comerciales}
+
+\begin{itemize}
+  \item \textbf{Cisco Secure Network Analytics} (antes Stealthwatch): Utiliza ML para análisis de comportamiento de red.
+  \item \textbf{Darktrace:} Plataforma de ciberseguridad basada en IA que utiliza algoritmos de aprendizaje auto-supervisado.
+  \item \textbf{Fortinet FortiGate:} Firewalls de nueva generación con capacidades IDS/IPS integradas.
+\end{itemize}
+
+\section{Posicionamiento del Proyecto}
+
+\begin{table}[H]
+  \centering
+  \caption{Comparativa de soluciones IDS/IPS}
+  \label{tab:comparativa}
+  \begin{tabularx}{\textwidth}{lccccc}
+    \toprule
+    \textbf{Característica} & \textbf{Snort} & \textbf{Suricata} & \textbf{Darktrace} & \textbf{IPS-IDBS-ML} \\
+    \midrule
+    Código abierto & Sí & Sí & No & Sí \\
+    ML para detección & No & Limitado & Sí & Sí (CatBoost) \\
+    Bloqueo automatizado & Sí & Sí & No & Sí (FW + MikroTik) \\
+    Interfaz SOC moderna & Limitada & Limitada & Sí & Sí (PyQt5 Fluent) \\
+    Costo & Gratuito & Gratuito & Alto & Gratuito \\
+    Alertas Telegram & No & No & Sí & Sí \\
+    Diseñado para Windows & No & Limitado & No & Sí \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ============================================================
+%  DISEÑO METODOLÓGICO
+% ============================================================
+\chapter{DISEÑO METODOLÓGICO}
+
+El diseño metodológico del proyecto se gestiona a través de la metodología ágil Scrumban, permitiendo optimizar el flujo de trabajo continuo y la resolución flexible de tareas.
+
+\section{Tipo de Investigación}
+
+Investigación Aplicada Tecnológica, enfocada en el diseño, desarrollo e implementación de un sistema funcional adaptado a las necesidades reales de UNIPAZ.
+
+\section{Enfoque}
+
+Híbrido (Mixto):
+\begin{itemize}
+  \item \textbf{Cuantitativo:} Medición estadística de la precisión del modelo (CatBoost), rendimiento del motor de captura (FPS) y consumo de recursos (CPU/RAM).
+  \item \textbf{Cualitativo:} Diagnóstico técnico y entrevistas semiestructuradas al personal de TI de la universidad para evaluar la mitigación de amenazas.
+\end{itemize}
+
+\section{Fuentes de Información}
+
+\begin{itemize}
+  \item \textbf{Primarias:} Captura de paquetes en tiempo real y logs de tráfico de la red interna de UNIPAZ.
+  \item \textbf{Secundarias:} Datasets académicos de ciberseguridad (CIC-IDS2017) y literatura científica indexada (IEEE, MIST).
+\end{itemize}
+
+\section{Población Objeto}
+
+Infraestructura de red de UNIPAZ NET, la cual soporta a una comunidad de aproximadamente 2,915 estudiantes y un promedio de 1,730 dispositivos conectados en horas pico.
+
+\section{Fases Metodológicas}
+
+El proyecto se estructura en 4 fases correlacionadas directamente con los objetivos específicos:
+
+\subsection{Fase 1: Configuración del Entorno de Captura}
+
+Configuración del entorno de captura en los switches TP-Link Omada/Raisecom mediante Port Mirroring (SPAN). Procesamiento de tramas etiquetadas IEEE 802.1Q mediante Npcap y aislamiento de campos IP, Puertos y Flags TCP. Implementación de los seis detectores heurísticos con umbrales configurables.
+
+\textbf{Corresponde a:} Objetivo Específico 01 (Diagnóstico).
+
+\subsection{Fase 2: Entrenamiento del Modelo ML}
+
+Balanceo y normalización del dataset CIC-IDS2017, generación de dataset sintético de 20,000 registros balanceado con SMOTE, selección de 22 características mediante SelectKBest, proceso de tuning de hiperparámetros de CatBoost y configuración de hilos de ejecución con aceleración por GPU (CUDA).
+
+\textbf{Corresponde a:} Objetivo Específico 02 (Entrenar y Validar).
+
+\subsection{Fase 3: Desarrollo del Módulo IPS}
+
+Desarrollo de scripts en Python para la automatización del bloqueo. Integración del canal de comunicación SSH/API con los routers MikroTik Core (CCR2004/CCR1009) para inyección de la cadena `/ip firewall filter`. Programación del algoritmo de exclusión estricta (Whitelist) para proteger los servidores de notas y matrículas.
+
+\textbf{Corresponde a:} Objetivo Específico 03 (Desarrollar e Implementar).
+
+\subsection{Fase 4: Evaluación y Monitoreo}
+
+Evaluación del funcionamiento del sistema en un entorno real mediante pruebas de monitoreo continuo, análisis de rendimiento (FPS, CPU/RAM), verificación de detección de ataques y validación del módulo de bloqueo automático.
+
+\textbf{Corresponde a:} Objetivo Específico 04 (Evaluar).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{"diagramas/fases del proyecto y sus objetivos"}
+  \caption{Fases del proyecto y su correspondencia con los objetivos}
+  \label{fig:fases}
+\end{figure}
+
+\section{Metodología Scrumban}
+
+Scrumban es una metodología híbrida que combina la estructura de Scrum con la flexibilidad y el enfoque de flujo continuo de Kanban, formalizada por Corey Ladas (2009).
+
+\subsection{Principios Aplicados}
+
+\begin{enumerate}
+  \item \textbf{Planificación por Demanda (Pull System):} Las tareas se toman del backlog cuando hay capacidad disponible.
+  \item \textbf{Límites de Trabajo en Progreso (WIP Limits):} Máximo 2 tareas en "En Progreso" y 3 en "Revisión".
+  \item \textbf{Flujo Continuo con Retroalimentación:} Reuniones periódicas cada 1-2 semanas para ajustar prioridades.
+  \item \textbf{Mejora Continua (Kaizen):} Retrospectivas al finalizar cada bloque de trabajo.
+  \item \textbf{Visualización del Flujo de Trabajo:} Tablero Kanban con columnas de estado.
+  \item \textbf{Iteraciones Basadas en Entregas:} Hitos: Captura $\rightarrow$ Heurística $\rightarrow$ ML $\rightarrow$ IPS $\rightarrow$ Dashboard.
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{"diagramas/metodologia kamban"}
+  \caption{Tablero Kanban del proyecto IPS-IDBS-ML}
+  \label{fig:kanban}
+\end{figure}
+
+\section{Arquitectura de Red Institucional}
+
+La infraestructura sigue un modelo de diseño jerárquico empresarial estructurado en tres capas:
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{"diagramas/diagrama red unipaz"}
+  \caption{Diagrama de topología de red de UNIPAZ}
+  \label{fig:topologia}
+\end{figure}
+
+\begin{verbatim}
+[PROVEEDOR DE INTERNET (ISP)]
+          |
+          v
+[Equipo de Borde (EB)]  (Propiedad del ISP)
+          |
+          v (Fibra Optica)
+
+[ Sophos XGS 3300 ]          <- Firewall Perimetral
+[ Raisecom ISCOM S3600 ]     <- Switch Central de Fibra
+[ MikroTik CCR2004/CCR1009 ] <- Router Core y DHCP
+
+     ------+------
+     |     |     |
+     v     v     v
+  [SR1]  [SR2] [SR3]     <- Nodos de Distribucion
+ (Aulas)(Bib.)(Externos)
+
+[TP-Link Omada Switches]   <- Switches de Acceso PoE+
+[UniFi 6 LR / AP Ruckus]  <- Puntos de Acceso Wi-Fi
+
+    -- VLANs 802.1Q --
+[Estudiantes] [Docentes] [Admin/5G]
+\end{verbatim}
+
+\subsection{Distribución de Subredes}
+
+\begin{itemize}
+  \item \textbf{Nodo SR1 (Bloque de Aulas):} Pisos 1, 2, 3 y 4. Cableado UTP Categoría 6 vertical.
+  \item \textbf{Nodo SR2 (Biblioteca):} Primer y Segundo piso. Alta densidad de usuarios.
+  \item \textbf{Nodo SR3 (Salones Externos):} Cafetería 2, Semilleros, Aulas 10, 12, 13, 14, 15 y 17.
+\end{itemize}
+
+\subsection{Mecanismo de Captura (SPAN)}
+
+La máquina de captura Windows se conecta a un puerto espejo configurado en el switch central Raisecom ISCOM S3600 o en los switches TP-Link Omada. El script de captura utiliza Npcap en modo promiscuo y procesa los tags VLAN 802.1Q para clasificar las alertas según el estamento.
+
+\subsection{Mecanismo de Bloqueo (IPS)}
+
+Al detectar una intrusión confirmada por el modelo de IA o por las reglas heurísticas, el software envía un comando remoto automatizado vía SSH al router MikroTik para añadir dinámicamente la IP del atacante al firewall (`/ip firewall filter`), denegando su acceso a toda la infraestructura.
+
+% ============================================================
+%  COMPONENTES DEL SISTEMA
+% ============================================================
+\chapter{COMPONENTES DEL SISTEMA IPS-IDBS-ML}
+
+\section{Arquitectura General}
+
+El sistema IPS-IDBS-ML está compuesto por los siguientes módulos interconectados:
+
+\begin{table}[H]
+  \centering
+  \caption{Componentes del sistema IPS-IDBS-ML}
+  \label{tab:componentes}
+  \begin{tabularx}{\textwidth}{lXl}
+    \toprule
+    \textbf{Componente} & \textbf{Descripción} & \textbf{Tecnología} \\
+    \midrule
+    Motor de Captura & Captura pasiva de paquetes mediante port mirroring (SPAN) & Scapy + Npcap \\
+    Analizador Heurístico & Detección por reglas de umbrales para 6 tipos de ataque & Python puro \\
+    Motor de Flujos & Agrupación en flujos bidireccionales con 22 características & \texttt{flujos\_red.py} \\
+    Clasificador ML & Modelo de clasificación en 7 categorías & CatBoost (91.9\% acc) \\
+    Módulo IPS & Bloqueo activo de IPs maliciosas & netsh + MikroTik SSH \\
+    Panel de Control & Dashboard SOC con 4 pestañas & PyQt5 + qfluentwidgets \\
+    Sistema de Alertas & Notificaciones push de ataques & Telegram Bot API \\
+    Persistencia & Almacenamiento local de eventos & SQLite + CSV \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Motor de Captura}
+
+El sistema utiliza Scapy con el driver Npcap forzado mediante \texttt{conf.use\_pcap = True} para capturar paquetes en Windows. La captura se realiza en modo promiscuo, recibiendo tramas Ethernet completas incluyendo los tags VLAN 802.1Q.
+
+\section{Detectores Heurísticos}
+
+Se implementaron seis detectores independientes con umbrales configurables:
+
+\begin{table}[H]
+  \centering
+  \caption{Umbrales de detección heurística}
+  \label{tab:umbrales}
+  \begin{tabularx}{\textwidth}{lXc}
+    \toprule
+    \textbf{Tipo de Ataque} & \textbf{Descripción} & \textbf{Umbral} \\
+    \midrule
+    SYN Flood & Múltiples paquetes SYN sin completar handshake & 10 paquetes/s \\
+    DDoS Distribuido & Múltiples IPs origen a un mismo destino & 500 paquetes/s \\
+    Port Scanner & Escaneo de múltiples puertos en un host & 10 puertos/s \\
+    Posible Exploit & Patrones de explotación (FTP/SSH/SMB) & Por firma \\
+    Inyección SQL & Detección de comandos SQL en payload & Por regex \\
+    UDP Flood & Inundación de paquetes UDP & 500 paquetes/s \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Clasificador Machine Learning}
+
+\subsection{Generación del Dataset}
+
+Se generó un dataset sintético de 20,000 registros con tráfico realista: 60\% tráfico normal y 40\% tráfico malicioso distribuido en 6 categorías de ataque.
+
+\subsection{Preprocesamiento}
+
+\begin{itemize}
+  \item Limpieza de datos y eliminación de outliers.
+  \item Balanceo de clases mediante SMOTE (Synthetic Minority Over-sampling Technique).
+  \item Selección de 22 características relevantes mediante SelectKBest.
+\end{itemize}
+
+\subsection{Entrenamiento}
+
+El modelo CatBoost fue entrenado con los siguientes hiperparámetros:
+
+\begin{itemize}
+  \item Algoritmo: Gradient Boosting sobre árboles de decisión.
+  \item Manejo nativo de características categóricas (Ordered Target Statistics).
+  \item Aceleración por GPU NVIDIA RTX 4070 SUPER (CUDA).
+  \item Evaluación: Validación cruzada 5-fold.
+\end{itemize}
+
+\subsection{Resultados}
+
+El modelo alcanzó un \textbf{Accuracy del 91.9\%}. La lógica de decisión híbrida funciona de la siguiente manera:
+\begin{itemize}
+  \item Si el ML tiene confianza $\geq 70\%$, su veredicto prevalece.
+  \item Si el ML tiene confianza $< 70\%$, las reglas heurísticas toman el control.
+\end{itemize}
+
+\section{Módulo IPS (Respuesta Activa)}
+
+\begin{itemize}
+  \item \textbf{Bloqueo Local:} Mediante netsh advfirewall en Windows.
+  \item \textbf{Bloqueo Remoto:} Comandos SSH a MikroTik RouterOS para añadir regla en `/ip firewall filter`.
+  \item \textbf{Temporizador de Desbloqueo:} Desbloqueo automático tras tiempo configurable.
+  \item \textbf{Whitelist:} Lista blanca de IPs críticas (servidores de notas, matrículas, aulas virtuales).
+  \item \textbf{Modo Híbrido:} Automático para ataques externos/volumétricos, semi-autónomo (solo alerta) para tráfico interno.
+\end{itemize}
+
+\section{Panel de Control SOC}
+
+El dashboard en PyQt5 con Fluent Design incluye:
+\begin{itemize}
+  \item Pestaña SOC: Tabla de eventos en vivo con clasificación ML.
+  \item Pestaña IPS: Tabla de bloqueos con countdown, badges de resumen y desbloqueo manual.
+  \item Pestaña Estadísticas: Gráfico de torta, gráfico de área en tiempo real, top IPs atacantes.
+  \item Pestaña Configuración: Selección de interfaz, umbrales, modo IPS, inicio/parada.
+\end{itemize}
+
+\section{Sistema de Alertas}
+
+Integración con Telegram Bot API para notificaciones instantáneas con detalles del ataque (tipo, severidad, IP origen, VLAN, timestamp).
+
+% ============================================================
+%  CONCLUSIONES
+% ============================================================
+\chapter{CONCLUSIONES}
+
+\section{Efectividad del Modelo}
+
+Se logró implementar con éxito un sistema IDS/IPS basado en Machine Learning (CatBoost), alcanzando una precisión del 91.9\% en la detección de intrusiones, superando la capacidad de respuesta de los sistemas de firmas estáticas tradicionales y demostrando ser una alternativa eficiente y de bajo costo comparada con soluciones comerciales.
+
+\section{Impacto en la Red Institucional}
+
+La integración de este sistema en la red de UNIPAZ demostró ser viable, garantizando la adaptabilidad necesaria frente al tráfico real de la comunidad universitaria. El sistema no solo detecta, sino que permite el análisis estadístico y el bloqueo automático, reduciendo significativamente la exposición a vulnerabilidades de red.
+
+\section{Validación de la Metodología}
+
+El uso de la metodología Scrumban permitió una gestión ágil y un flujo de desarrollo continuo, facilitando la identificación y corrección inmediata de errores durante la implementación del sistema y garantizando el cumplimiento de los hitos del proyecto.
+
+\section{Alcance Tecnológico}
+
+El desarrollo de una interfaz gráfica intuitiva, apoyada en herramientas de código abierto (Python, PyQt5, Scapy), permitió democratizar el acceso a herramientas de ciberseguridad robustas, cumpliendo con el objetivo de dotar a la institución de una capa de protección proactiva y escalable.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{"diagramas/concluciones"}
+  \caption{Resumen de conclusiones del proyecto}
+  \label{fig:conclusiones}
+\end{figure}
+
+% ============================================================
+%  CRONOGRAMA DE ACTIVIDADES
+% ============================================================
+\chapter{CRONOGRAMA DE ACTIVIDADES}
+
+\begin{table}[H]
+  \centering
+  \caption{Cronograma de actividades del proyecto}
+  \label{tab:cronograma}
+  \begin{tabularx}{\textwidth}{lcccc}
+    \toprule
+    \textbf{Actividad} & \textbf{Sem 1-2} & \textbf{Sem 3-4} & \textbf{Sem 5-6} & \textbf{Sem 7-8} \\
+    \midrule
+    Configuración captura Npcap/Scapy & $\checkmark$ & & & \\
+    Implementación detectores heurísticos & $\checkmark$ & $\checkmark$ & & \\
+    Generación y balanceo de dataset & & $\checkmark$ & & \\
+    Entrenamiento modelo CatBoost & & $\checkmark$ & $\checkmark$ & \\
+    Integración ML en flujo en vivo & & & $\checkmark$ & \\
+    Desarrollo módulo IPS (Windows) & & & $\checkmark$ & \\
+    Integración MikroTik RouterOS & & & $\checkmark$ & $\checkmark$ \\
+    Dashboard SOC PyQt5 & & & & $\checkmark$ \\
+    Pruebas de integración & & & & $\checkmark$ \\
+    Documentación final & & & & $\checkmark$ \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ============================================================
+%  PRESUPUESTO
+% ============================================================
+\chapter{PRESUPUESTO}
+
+\begin{table}[H]
+  \centering
+  \caption{Matriz financiera del proyecto}
+  \label{tab:presupuesto}
+  \begin{tabularx}{\textwidth}{lXrr}
+    \toprule
+    \textbf{Categoría} & \textbf{Elemento} & \textbf{Costo Real} & \textbf{Costo Estimado} \\
+    \midrule
+    \multirow{3}{*}{Hardware} & CPU Intel i9-14900KF & Aportado & 2,500,000 COP \\
+    & 64 GB RAM DDR5 & Aportado & 800,000 COP \\
+    & RTX 4070 SUPER 12GB & Aportado & 3,200,000 COP \\
+    \midrule
+    \multirow{5}{*}{Software} & Python 3.x & Gratuito & 0 COP \\
+    & CatBoost & Gratuito & 0 COP \\
+    & Npcap & Gratuito & 0 COP \\
+    & PyQt5 + qfluentwidgets & Gratuito & 0 COP \\
+    & RouterOS API & Gratuito & 0 COP \\
+    \midrule
+    \multirow{2}{*}{Recurso Humano} & Investigador (K. Rojas) & Aportado & 8,000,000 COP \\
+    & Director de tesis & Aportado & 2,000,000 COP \\
+    \midrule
+    \textbf{Total} & & \textbf{0 COP} & \textbf{16,500,000 COP} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ============================================================
+%  TRABAJO FUTURO
+% ============================================================
+\chapter{TRABAJO FUTURO}
+
+\begin{itemize}
+  \item Integración con AbuseIPDB para verificación de reputación de IPs.
+  \item Dashboard web interactivo con Flask o Node.js para acceso remoto.
+  \item Expansión del dataset con tráfico real de UNIPAZ para reentrenamiento continuo del modelo.
+  \item Implementación de autoencoders para detección de anomalías zero-day.
+  \item App móvil para notificaciones y monitoreo rápido.
+  \item Integración con sistemas SIEM como Wazuh o Elastic Stack.
+  \item Pruebas de rendimiento exhaustivas en horarios pico reales.
+\end{itemize}
+
+% ============================================================
+%  REFERENCIAS BIBLIOGRÁFICAS (NTC 6166)
+% ============================================================
+\chapter{REFERENCIAS BIBLIOGRÁFICAS}
+
+\section*{Libros y Textos Académicos}
+\addcontentsline{toc}{section}{Libros y Textos Académicos}
+
+\begin{enumerate}[label=\arabic*., ref=\arabic*]
+  \item LADAS, Corey. \textit{Scrumban: Essays on Kanban Systems for Lean Software Development}. Modus Cooperandi Press, 2009.
+  
+  \item STALLINGS, William. \textit{Cryptography and Network Security: Principles and Practice}. 7ª ed. Pearson, 2018.
+  
+  \item SCARFONE, Karen; MELL, Peter. \textit{Guide to Intrusion Detection and Prevention Systems (IDPS)}. NIST Special Publication 800-94. National Institute of Standards and Technology, 2007.
+  
+  \item NORTHCUTT, Stephen; NOVAK, Judy. \textit{Network Intrusion Detection: An Analyst's Handbook}. 3ª ed. New Riders Publishing, 2002.
+  
+  \item BISHOP, Christopher M. \textit{Pattern Recognition and Machine Learning}. Springer, 2006.
+  
+  \item PROVOST, Foster; FAWCETT, Tom. \textit{Data Science for Business}. O'Reilly Media, 2013.
+  
+  \item ANDERSON, David J. \textit{Kanban: Successful Evolutionary Change for Your Technology Business}. Blue Hole Press, 2010.
+\end{enumerate}
+
+\section*{Artículos Científicos}
+\addcontentsline{toc}{section}{Artículos Científicos}
+
+\begin{enumerate}[label=\arabic*., ref=\arabic*]
+  \item DENNING, Dorothy E. An Intrusion-Detection Model. \textit{IEEE Transactions on Software Engineering}, 1987, vol. SE-13, no. 2, p. 222-232.
+  
+  \item ZHANG, Y., et al. Network Intrusion Detection Based on Random Forest and Deep Learning. \textit{IEEE Access}, 2021, vol. 9, p. 115732-115745.
+  
+  \item HWANG, S., et al. CatBoost-Based Intrusion Detection System for IoT Networks. \textit{Sensors}, 2020, vol. 20, no. 22, p. 6528.
+  
+  \item ALQAHTANI, H., et al. Comparative Analysis of Gradient Boosting Algorithms for Network Intrusion Detection. \textit{Computers, Materials \& Continua}, 2022, vol. 71, no. 2, p. 3129-3145.
+  
+  \item VINAYAKUMAR, R., et al. Deep Learning Approach for Intelligent Intrusion Detection System. \textit{IEEE Access}, 2019, vol. 7, p. 41525-41550.
+  
+  \item SHARAFALDIN, I.; LASHKARI, A. H.; GHORBANI, A. A. Toward Generating a New Intrusion Detection Dataset and Intrusion Traffic Characterization. \textit{ICISSP 2018}, p. 108-116.
+  
+  \item RING, M., et al. A Survey of Network-based Intrusion Detection Data Sets. \textit{Computers \& Security}, 2019, vol. 86, p. 147-167.
+  
+  \item CHANDOLA, V.; BANERJEE, A.; KUMAR, V. Anomaly Detection: A Survey. \textit{ACM Computing Surveys}, 2009, vol. 41, no. 3, p. 1-58.
+\end{enumerate}
+
+\section*{Documentación Técnica y Referencias Web (NTC 4430)}
+\addcontentsline{toc}{section}{Documentación Técnica y Referencias Web}
+
+\begin{enumerate}[label=\arabic*., ref=\arabic*]
+  \item NIST. \textit{NIST SP 800-94 Rev. 1: Guide to Intrusion Detection and Prevention Systems (IDPS)}. 2011. Disponible en: \url{https://csrc.nist.gov/publications/detail/sp/800-94/rev-1/final}
+  
+  \item CANADIAN INSTITUTE FOR CYBERSECURITY. \textit{CSE-CIC-IDS2018 Dataset}. 2018. Disponible en: \url{https://www.unb.ca/cic/datasets/ids-2018.html}
+  
+  \item YANDEX. \textit{CatBoost Documentation}. 2017. Disponible en: \url{https://catboost.ai/docs/}
+  
+  \item OISF. \textit{Suricata User Guide}. 2010. Disponible en: \url{https://suricata.readthedocs.io/}
+  
+  \item CISCO SYSTEMS. \textit{Cisco Secure Network Analytics}. 2020. Disponible en: \url{https://www.cisco.com/c/en/us/products/security/secure-network-analytics/}
+  
+  \item DARKTRACE. \textit{Darktrace Enterprise Immune System}. 2013. Disponible en: \url{https://darktrace.com/}
+  
+  \item EDUCAUSE. \textit{EDUCAUSE 2024 Cybersecurity Report}. 2024. Disponible en: \url{https://www.educause.edu/}
+  
+  \item ENISA. \textit{ENISA Threat Landscape 2023}. European Union Agency for Cybersecurity, 2023. Disponible en: \url{https://www.enisa.europa.eu/}
+  
+  \item ISC2. \textit{ISC2 Cybersecurity Workforce Study}. 2023. Disponible en: \url{https://www.isc2.org/}
+  
+  \item KNIBERG, Henrik; SKARIN, Mattias. \textit{Kanban and Scrum: Making the Most of Both}. InfoQ Enterprise Software Development Series, 2010.
+\end{enumerate}
+
+% ============================================================
+%  ANEXOS
+% ============================================================
+\appendix
+\chapter{ANEXOS}
+
+\section*{Anexo A: Diagrama de Topología de Red}
+\addcontentsline{toc}{section}{Anexo A: Diagrama de Topología de Red}
+\centering
+\includegraphics[width=0.9\textwidth]{"diagramas/diagrama red unipaz"}
+
+\newpage
+\section*{Anexo B: Fases del Proyecto}
+\addcontentsline{toc}{section}{Anexo B: Fases del Proyecto}
+\centering
+\includegraphics[width=0.9\textwidth]{"diagramas/fases del proyecto y sus objetivos"}
+
+\newpage
+\section*{Anexo C: Justificación del Proyecto}
+\addcontentsline{toc}{section}{Anexo C: Justificación del Proyecto}
+\centering
+\includegraphics[width=0.9\textwidth]{"diagramas/JUSTIFICACIÓN"}
+
+\newpage
+\section*{Anexo D: Metodología Kanban}
+\addcontentsline{toc}{section}{Anexo D: Metodología Kanban}
+\centering
+\includegraphics[width=0.9\textwidth]{"diagramas/metodologia kamban"}
+
+\newpage
+\section*{Anexo E: Objetivos del Proyecto}
+\addcontentsline{toc}{section}{Anexo E: Objetivos del Proyecto}
+\centering
+\includegraphics[width=0.85\textwidth]{"diagramas/objetivos"}
+
+\newpage
+\section*{Anexo F: Planteamiento del Problema}
+\addcontentsline{toc}{section}{Anexo F: Planteamiento del Problema}
+\centering
+\includegraphics[width=0.9\textwidth]{"diagramas/PLANTEAMIENTO DEL PROBLEMA EVIDENCIA DEL PROBLEMA"}
+
+\newpage
+\section*{Anexo G: Conclusiones}
+\addcontentsline{toc}{section}{Anexo G: Conclusiones}
+\centering
+\includegraphics[width=0.85\textwidth]{"diagramas/concluciones"}
+
+\end{document}

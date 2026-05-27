@@ -1,0 +1,16 @@
+# Core Machine Learning & Data Processing
+catboost>=1.2.0
+pandas
+numpy
+scikit-learn
+joblib
+
+# GUI (Interfaz Gráfica)
+PyQt5
+PyQt-Fluent-Widgets
+matplotlib
+
+# Red y Detección
+scapy
+paramiko
+requests

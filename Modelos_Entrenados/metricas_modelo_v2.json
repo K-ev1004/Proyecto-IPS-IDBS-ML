@@ -1,0 +1,119 @@
+{
+  "accuracy": 0.9819672206528587,
+  "f1_macro": 0.9015729560332556,
+  "precision_macro": 0.8767567279844588,
+  "recall_macro": 0.9399336415026539,
+  "kappa": 0.9398403438828032,
+  "individual": {
+    "RF": {
+      "accuracy": 0.9582065623069695,
+      "f1_macro": 0.7730432553483028
+    },
+    "XGB": {
+      "accuracy": 0.9837084222965775,
+      "f1_macro": 0.908726971097025
+    },
+    "CatBoost": {
+      "accuracy": 0.9820331288136684,
+      "f1_macro": 0.9038121666079776
+    }
+  },
+  "confusion_matrix": [
+    [
+      69900,
+      0,
+      541,
+      1,
+      2352,
+      91,
+      108
+    ],
+    [
+      0,
+      371,
+      64,
+      0,
+      0,
+      1,
+      0
+    ],
+    [
+      72,
+      193,
+      469079,
+      237,
+      91,
+      4469,
+      45
+    ],
+    [
+      0,
+      2,
+      43,
+      31779,
+      76,
+      20,
+      3
+    ],
+    [
+      101,
+      1,
+      616,
+      7,
+      4231,
+      1,
+      34
+    ],
+    [
+      587,
+      0,
+      1720,
+      0,
+      6,
+      58018,
+      76
+    ],
+    [
+      21,
+      0,
+      34,
+      0,
+      109,
+      0,
+      7323
+    ]
+  ],
+  "clases": [
+    "DDoS_Distribuido",
+    "Inyeccion_SQL",
+    "Normal",
+    "Port_Scanner",
+    "Posible_Exploit",
+    "SYN_Flood",
+    "UDP_Flood"
+  ],
+  "features_seleccionadas": [
+    "Idle Mean",
+    "Idle Max",
+    "Idle Min",
+    "Packet Length Mean",
+    "Bwd Header Length",
+    "Flow Packets/s",
+    "PSH Flag Count",
+    "Bwd Packet Length Min",
+    "Fwd Header Length",
+    "Fwd Packets/s",
+    "Down/Up Ratio",
+    "Fwd Packet Length Max",
+    "Avg Bwd Segment Size",
+    "Bwd Packet Length Mean",
+    "ACK Flag Count",
+    "Flow IAT Min",
+    "Fwd Packet Length Min",
+    "FIN Flag Count",
+    "Bwd Packet Length Max",
+    "Subflow Bwd Packets"
+  ],
+  "n_train": 800000,
+  "n_test": 652423
+}

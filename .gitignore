@@ -31,9 +31,8 @@ Dataset_Limpio/
 *.npy
 *.csv
 
-# --- CORRECCIONES AQUÍ ---
-# Ignorar TODA la carpeta de modelos (los .pkl suelen pesar mucho)
-Modelos_Entrenados/
+# Ignorar el modelo que rompe GitHub
+Modelos_Entrenados/rf_individual.pkl
 
 # Carpetas de respaldo y reportes pesados
 Backup_v1/

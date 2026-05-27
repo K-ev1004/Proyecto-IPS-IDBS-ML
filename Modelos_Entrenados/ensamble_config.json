@@ -1,0 +1,13 @@
+{
+  "modelos": [
+    "rf_individual.pkl",
+    "xgb_individual.pkl",
+    "cat_individual.pkl"
+  ],
+  "weights": [
+    1,
+    2,
+    1.5
+  ],
+  "voting": "soft"
+}

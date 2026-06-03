@@ -3,6 +3,7 @@ catboost>=1.2.0
 pandas
 numpy
 scikit-learn
+imbalanced-learn
 joblib
 
 # GUI (Interfaz Gráfica)

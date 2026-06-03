@@ -5,7 +5,7 @@ intrusiones.db
 *.sqlite3
 
 # Archivos y carpetas CIC
-CSE-CIC-IDS2018/
+datasets/
 
 # Carpeta de ips ids funcionales de github
 ips-ids funcionales de github/
@@ -31,8 +31,9 @@ Dataset_Limpio/
 *.npy
 *.csv
 
-# Ignorar el modelo que rompe GitHub
-Modelos_Entrenados/rf_individual.pkl
+# Ignorar todos los modelos excepto la versión 4
+Modelos_Entrenados/*
+!Modelos_Entrenados/*v4*
 
 # Carpetas de respaldo y reportes pesados
 Backup_v1/

@@ -164,27 +164,27 @@ def ip_en_rangos(ip: str) -> bool:
 
 
 # =============================================================================
-# CARGA DE MODELOS V3
+# CARGA DE MODELOS V4
 # =============================================================================
-ruta_modelo_v3 = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'pipeline_catboost_v3.pkl')
-ruta_features_v3 = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'selected_features_v3.pkl')
-ruta_label_encoder_v3 = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'label_encoder_v3.pkl')
+model_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'pipeline_catboost_v4.pkl')
+features_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'selected_features_v4.pkl')
+le_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'label_encoder_v4.pkl')
 
 modelo_ml = None
 features_seleccionadas = None
 tipo_ataque_encoder = None
 
-if os.path.exists(ruta_modelo_v3) and os.path.exists(ruta_features_v3) and os.path.exists(ruta_label_encoder_v3):
+if os.path.exists(model_path) and os.path.exists(features_path) and os.path.exists(le_path):
     try:
-        modelo_ml = joblib.load(ruta_modelo_v3)
-        features_seleccionadas = joblib.load(ruta_features_v3)
-        tipo_ataque_encoder = joblib.load(ruta_label_encoder_v3)
-        print("[OK] Modelo ML v3 (Flow-based) cargado correctamente.")
+        modelo_ml = joblib.load(model_path)
+        features_seleccionadas = joblib.load(features_path)
+        tipo_ataque_encoder = joblib.load(le_path)
+        print("[OK] Modelo ML v4 (Multi-Dataset) cargado correctamente.")
     except Exception as e:
-        print(f"[X] Error cargando modelo v3: {e}")
+        print(f"[X] Error cargando modelo v4: {e}")
         modelo_ml = None
 else:
-    print("[!] No se encontró modelo ML v3. Se usará solo detección heurística.")
+    print("[!] No se encontró modelo ML v4. Se usará solo detección heurística.")
 
 
 # =============================================================================
@@ -246,8 +246,9 @@ def on_flow_ready(ip_src, ip_dst, features_dict):
         
         # Actualizar riesgo global en dashboard
         if tipo_str != 'Normal':
-            metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza * 10))
-            guardar_ataque(ip_src, tipo_str, "TCP/UDP", features_dict.get('Dst Port', 0), ip_dst, flag="N/A", es_ml_puro=True, confianza_ml=confianza)
+            if confianza >= 0.85:
+                metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza * 10))
+                guardar_ataque(ip_src, tipo_str, "TCP/UDP", features_dict.get('Dst Port', 0), ip_dst, flag="N/A", es_ml_puro=True, confianza_ml=confianza)
         else:
             metricas_trafico['riesgo_global'] = max(0.0, metricas_trafico['riesgo_global'] - 0.5)
             

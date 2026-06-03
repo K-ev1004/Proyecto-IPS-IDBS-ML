@@ -1,0 +1,20 @@
+MÉTRICAS MODELO V4 (MULTI-DATASET CON SMOTE)
+==================================================
+Accuracy: 0.8551
+F1-Macro: 0.7165
+Kappa:    0.8014
+
+REPORTE CLASIFICACIÓN:
+                  precision    recall  f1-score   support
+
+DDoS_Distribuido       0.88      0.90      0.89    200000
+   Inyeccion_SQL       0.01      0.92      0.03       186
+          Normal       0.92      0.91      0.91    300000
+    Port_Scanner       0.84      0.99      0.91     31786
+ Posible_Exploit       0.88      0.75      0.81    111353
+       SYN_Flood       0.72      0.67      0.69    100000
+       UDP_Flood       0.63      1.00      0.77      3975
+
+        accuracy                           0.86    747300
+       macro avg       0.70      0.88      0.72    747300
+    weighted avg       0.87      0.86      0.86    747300

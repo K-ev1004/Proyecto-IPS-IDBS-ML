@@ -32,9 +32,15 @@ Dataset_Limpio/
 *.npy
 *.csv
 
-# Ignorar todos los modelos excepto la versión 4
+# Ignorar todos los modelos de entrenamiento salvo el modelo de PRODUCCIÓN:
+# multiclase v5 + detector SQLiGuard. Se suben mediante Git LFS
+# (pipeline_catboost_v5.pkl pesa ~125 MB, supera el limite de 100 MB de GitHub).
 Modelos_Entrenados/*
-!Modelos_Entrenados/*v4*
+!Modelos_Entrenados/*v5*
+!Modelos_Entrenados/sqli_guard.pkl
+!Modelos_Entrenados/sql_guard_features.pkl
+!Modelos_Entrenados/metricas_v5.txt
+!Modelos_Entrenados/metricas_sqli_guard.txt
 
 # Carpetas de respaldo y reportes pesados
 Backup_v1/

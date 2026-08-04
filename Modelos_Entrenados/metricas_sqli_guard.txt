@@ -1,0 +1,17 @@
+MÉTRICAS SQLIGUARD (D1=Union train, D2=Blind test externo)
+=======================================================
+Accuracy:    0.8386
+Precision:   0.9984
+Recall:      0.6783
+F1:          0.8078
+
+               precision    recall  f1-score   support
+
+      Benigno       0.76      1.00      0.86     28615
+Inyeccion_SQL       1.00      0.68      0.81     28614
+
+     accuracy                           0.84     57229
+    macro avg       0.88      0.84      0.83     57229
+ weighted avg       0.88      0.84      0.83     57229
+Matriz: TN=28583 FP=32 FN=9204 TP=19410
+Umbral confirmacion SQLi: 0.5

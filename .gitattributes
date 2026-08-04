@@ -1,0 +1,4 @@
+# Modelos grandes se suben a GitHub mediante Git LFS (límite por archivo: 100 MB).
+# pipeline_catboost_v5.pkl pesa ~125 MB, por lo que requiere LFS.
+# Los .pkl ya rastreados como blobs normales (v2/v3/v4) no se modifican.
+Modelos_Entrenados/*.pkl filter=lfs diff=lfs merge=lfs -text

@@ -96,6 +96,7 @@ class FlujoBidireccional:
         bwd_pkt_len_std = np.std(self.bwd_pkt_lens) if len(self.bwd_pkt_lens) > 1 else 0
 
         features = {
+            'Src Port': self.src_port,
             'Dst Port': self.dst_port,
             'Protocol': 6 if self.protocolo == 'TCP' else (17 if self.protocolo == 'UDP' else 0),
             'Flow Duration': flow_duration,

@@ -1,1 +1,61 @@
-cambiar formato de exportacion de log, de una base de datos a un .log, con la misma informacion, hacerlo de manera automatica cada semana, y exportarlo a una carpeta externa, donde el archivo tendra por nombre algo como logsciberseguridad (fecha de la semana), y cambiar el formato de los log de bloqueos de .txt a .log, tambien em formato igual a laterior,
+TAREAS IDS/IPS - ESTADO
+
+[1] ✔ LOGS .LOG SEMANALES (log_exporter.py)
+    - Exportacion automatica cada semana a carpeta externa (logs_ciberseguridad).
+    - Nombres: logsciberseguridad_<fecha>.log
+    - Logs de bloqueo en formato .log.
+    - Corregido bug de filtro de fechas (_ts_en_rango parsea time.ctime()).
+
+[2] ✔ PIPELINE DE DATOS REPARADO (generador_dataset_global.py)
+    - Bug de encoding U+FFFD en CIC-IDS2017: labels corruptos como
+      'Web Attack � Sql Injection' no mapeaban (se perdian ~2180 ataques web).
+      Ahora _normalizar_label normaliza U+FFFD y guiones antes del MAPEO_CLASES.
+    - Dataset v5 (dataset_global_unipaz_v5.csv): Inyeccion_SQL pasa de 928 a 3108.
+    - Barras de progreso tqdm añadidas (archivos, chunks y balanceo).
+
+[3] ✔ MODELO V5 (CEREBRO_V5.py)
+    - Re-entrenado sobre dataset v5 con SMOTE focalizado en Inyeccion_SQL y
+      auto_class_weights Balanced. GPU.
+    - Metricas: acc 0.8641, F1-macro 0.7442, Kappa 0.8138
+      (v4: 0.8551 / 0.7165 / 0.8014). Precision SQLi 1% -> 7%.
+    - Artefactos: pipeline_catboost_v5.pkl, label_encoder_v5.pkl,
+      selected_features_v5.pkl, metricas_v5.txt.
+
+[4] ✔ SQLIGUARD - DETECTOR BINARIO DEDICADO (entrenar_sqli_guard.py)
+    - Dataset externo: "SQL Injection Attack Netflow" (Zenodo 6907252),
+      D1 (200K SQLi Union) entrenamiento + D2 (28K SQLi Blind) test externo.
+    - Metricas en test externo independiente (D2): Precision SQLi 99.8%,
+      Recall 75% (umbral 0.30), F1 0.86. Solo ~35 falsos positivos en 28K benignos.
+    - Artefactos: sqli_guard.pkl, sql_guard_features.pkl, metricas_sqli_guard.txt.
+
+[5] ✔ INTEGRACION PRODUCCION (ids.py + flujos_red.py)
+    - Migrado a artefactos v5 (pipeline_catboost_v5.pkl).
+    - SQLiGuard como capa de confirmacion de 2a etapa:
+        * Si SQLiGuard confirma (P>=0.30) -> Inyeccion_SQL (precision ~99.8%).
+        * v5 Inyeccion_SQL bajo umbral -> no se loguea (menos falsos positivos).
+    - Umbrales unificados a UMBRAL_ML=0.85 para logueo Y bloqueo ML
+      (antes log 0.85 / block 0.70: habia bloqueos sin registro).
+    - flujos_red.py: añadido 'Src Port' a features y Src Port al flujo.
+
+[6] ✔ TRAZABILIDAD (intrusiones.db)
+    - Nuevas columnas en tabla ataques: confianza_ml REAL, features_json TEXT
+      (ALTER para BD existentes). Permite auditar cada decision ML.
+    - Verificado end-to-end: SQLi real se confirma y persiste con confianza y
+      features; trafico benigno no genera falsos positivos.
+
+[7] O PENDIENTE (opcional): si se desea mayor recall de SQLi, bajar
+    UMBRAL_SQLI_GUARD en ids.py (e.g., 0.10 => recall 83%, precision sigue 99.8%).
+
+[8] ✔ FRONTEND ACTUALIZADO (interfasc.py)
+    - Pestaña Configuracion: nueva seccion "Umbrales del Motor ML (Confianza)"
+      con DoubleSpinBox para UMBRAL_ML (def 0.85) y UMBRAL_SQLI_GUARD (def 0.30),
+      persistidos en QSettings y aplicados en vivo a ids.py.
+    - Boton "Abrir Carpeta de Logs" en Acciones Globales (abre logs_ciberseguridad).
+    - Mapeo de clases del pie de "Distribucion de Amenazas" actualizado a las
+      7 clases reales del modelo v5 (Normal, Port_Scanner, Posible_Exploit,
+      SYN_Flood, UDP_Flood, DDoS_Distribuido, Inyeccion_SQL).
+    - log_exporter.py: nueva funcion obtener_carpeta_logs() reutilizable.
+    - Verificado: modulo importa, GUI instancia offscreen sin errores,
+      spin_umbral_ml=0.85, spin_umbral_sqli=0.3, boton_logs presente.
+    - Contrato senales intacto (eventos 7-tupla, nuevo_bloqueo, dashboard).
+

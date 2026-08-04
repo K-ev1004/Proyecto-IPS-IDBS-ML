@@ -25,7 +25,7 @@ from PyQt5.QtGui import QFont, QColor, QBrush
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, InfoBar, InfoBarPosition,
     PrimaryPushButton, TransparentPushButton, TableWidget,
-    ComboBox, LineEdit, SpinBox, CheckBox, PlainTextEdit, TextEdit,
+    ComboBox, LineEdit, SpinBox, DoubleSpinBox, CheckBox, PlainTextEdit, TextEdit,
     SubtitleLabel, BodyLabel, TitleLabel, Theme, setTheme, FluentIcon as FIF,
     SimpleCardWidget
 )
@@ -154,6 +154,11 @@ class IDSInterface(FluentWindow):
                 ids.BASE_THRESHOLD_DDOS = int(self.settings.value("thresh_ddos", ids.BASE_THRESHOLD_DDOS))
                 ids.BASE_THRESHOLD_UDP_FLOOD = int(self.settings.value("thresh_udp", ids.BASE_THRESHOLD_UDP_FLOOD))
                 ids.BASE_PORT_SCAN_THRESHOLD = int(self.settings.value("thresh_scan", ids.BASE_PORT_SCAN_THRESHOLD))
+                # Umbrales del motor ML (unificados y SQLiGuard)
+                if hasattr(ids, 'UMBRAL_ML'):
+                    ids.UMBRAL_ML = float(self.settings.value("umbral_ml", ids.UMBRAL_ML))
+                if hasattr(ids, 'UMBRAL_SQLI_GUARD'):
+                    ids.UMBRAL_SQLI_GUARD = float(self.settings.value("umbral_sqli", ids.UMBRAL_SQLI_GUARD))
             except Exception as e:
                 logging.error(f"Error cargando preferencias: {e}")
 
@@ -161,6 +166,46 @@ class IDSInterface(FluentWindow):
         if ids:
             setattr(ids, attr, value)
         self.settings.setValue(key, value)
+
+    def _update_umbral_ml(self, value):
+        # Umbral de confianza unificado (logueo Y bloqueo) del motor ML
+        if ids:
+            try:
+                ids.UMBRAL_ML = float(value)
+            except Exception as e:
+                logging.error(f"Error actualizando UMBRAL_ML: {e}")
+        self.settings.setValue("umbral_ml", float(value))
+
+    def _update_umbral_sqli(self, value):
+        # Umbral de confirmación de SQLiGuard (detector binario de 2a etapa)
+        if ids:
+            try:
+                ids.UMBRAL_SQLI_GUARD = float(value)
+            except Exception as e:
+                logging.error(f"Error actualizando UMBRAL_SQLI_GUARD: {e}")
+        self.settings.setValue("umbral_sqli", float(value))
+
+    def abrir_carpeta_logs(self):
+        """Abre el explorador en la carpeta donde log_exporter escribe los .log"""
+        try:
+            from log_exporter import obtener_carpeta_logs
+            carpeta = obtener_carpeta_logs()
+        except Exception:
+            carpeta = os.path.join(BASE_DIR, 'logs_ciberseguridad')
+        if not os.path.isdir(carpeta):
+            try:
+                os.makedirs(carpeta, exist_ok=True)
+            except Exception:
+                carpeta = BASE_DIR
+        try:
+            if sys.platform.startswith('win'):
+                os.startfile(carpeta)  # type: ignore
+            else:
+                import subprocess
+                subprocess.Popen(['xdg-open', carpeta])
+        except Exception as e:
+            logging.error(f"No se pudo abrir carpeta de logs {carpeta}: {e}")
+            self.mostrar_mensaje("Carpeta de Logs", carpeta, "info")
 
     def mostrar_mensaje(self, titulo, mensaje, tipo="info"):
         if tipo == "info":
@@ -628,6 +673,54 @@ class IDSInterface(FluentWindow):
         layout.addLayout(umbrales_layout)
         # --- FIN SECCIÓN UMBRALES ---
 
+        # --- SECCIÓN UMBRALES DEL MOTOR ML (CONFIANZA) ---
+        layout.addWidget(SubtitleLabel("Umbrales del Motor ML (Confianza)"))
+        info_ml = BodyLabel(
+            "El motor ML unifica logueo y bloqueo con un umbral de confianza. "
+            "SQLiGuard (2ª etapa) confirma Inyección SQL a partir de su propio umbral.\n"
+            "• UMBRAL ML: confianza mínima para registrar Y bloquear (def. 0.85).\n"
+            "• UMBRAL SQLiGuard: probabilidad mínima para confirmar SQLi (def. 0.30).\n"
+            "  Menor umbral SQLiGuard = más sensibilidad (más recall, igual precisión ~99.8%)."
+        )
+        info_ml.setWordWrap(True)
+        info_ml.setStyleSheet("color: #888888; font-size: 13px; font-style: italic;")
+        layout.addWidget(info_ml)
+
+        umbrales_ml_layout = QHBoxLayout()
+        umbrales_ml_layout.setSpacing(15)
+
+        # UMBRAL ML (unificado)
+        box_ml = QVBoxLayout()
+        ml_card = SimpleCardWidget()
+        ml_layout = QVBoxLayout(ml_card)
+        ml_layout.addWidget(BodyLabel("Confianza ML (registrar y bloquear):"))
+        self.spin_umbral_ml = DoubleSpinBox()
+        self.spin_umbral_ml.setRange(0.50, 0.99)
+        self.spin_umbral_ml.setSingleStep(0.01)
+        self.spin_umbral_ml.setValue(float(getattr(ids, 'UMBRAL_ML', 0.85)))
+        self.spin_umbral_ml.valueChanged.connect(self._update_umbral_ml)
+        ml_layout.addWidget(self.spin_umbral_ml)
+        box_ml.addWidget(ml_card)
+        umbrales_ml_layout.addLayout(box_ml)
+
+        # UMBRAL SQLiGuard (2ª etapa)
+        box_sqli = QVBoxLayout()
+        sqli_card = SimpleCardWidget()
+        sqli_layout = QVBoxLayout(sqli_card)
+        sqli_layout.addWidget(BodyLabel("SQLiGuard (confirmar SQLi):"))
+        self.spin_umbral_sqli = DoubleSpinBox()
+        self.spin_umbral_sqli.setRange(0.05, 0.99)
+        self.spin_umbral_sqli.setSingleStep(0.05)
+        self.spin_umbral_sqli.setValue(float(getattr(ids, 'UMBRAL_SQLI_GUARD', 0.30)))
+        self.spin_umbral_sqli.valueChanged.connect(self._update_umbral_sqli)
+        sqli_layout.addWidget(self.spin_umbral_sqli)
+        box_sqli.addWidget(sqli_card)
+        umbrales_ml_layout.addLayout(box_sqli)
+
+        layout.addLayout(umbrales_ml_layout)
+        layout.addStretch()
+        # --- FIN SECCIÓN UMBRALES ML ---
+
         layout.addWidget(SubtitleLabel("Acciones Globales"))
         
         acciones_layout = QHBoxLayout()
@@ -652,9 +745,12 @@ class IDSInterface(FluentWindow):
         self.boton_tema = TransparentPushButton("Alternar Apariencia (Dark/Light)")
         self.boton_tema.clicked.connect(self.cambiar_tema)
 
+        self.boton_logs = TransparentPushButton("Abrir Carpeta de Logs")
+        self.boton_logs.clicked.connect(self.abrir_carpeta_logs)
+
         for b in [self.boton_iniciar, self.boton_detener, self.boton_limpiar,
                   self.boton_exportar, self.boton_evidencia,
-                  self.boton_tema]:
+                  self.boton_tema, self.boton_logs]:
             acciones_layout.addWidget(b)
             
         acciones_layout.addStretch()
@@ -1342,15 +1438,33 @@ class IDSInterface(FluentWindow):
                 # Limpiar la etiqueta removiendo el texto "(ML: XX.X%)" para poder agrupar correctamente
                 tipos_limpios = [re.sub(r'\s*\(ML:\s*[\d\.]+%?\)', '', str(e[6])).strip() for e in eventos_muestra]
                 
-                # Mapeo de códigos numéricos a nombres descriptivos (si el ML devuelve números)
+                # Mapeo de clases del modelo v5 a nombres descriptivos (si llegara
+                # el código numérico o la etiqueta cruda del multiclase v5).
                 diccionario_ataques = {
                     "0": "Tráfico Normal",
+                    "Normal": "Tráfico Normal",
                     "1": "Escaneo de Puertos",
-                    "2": "Fuerza Bruta",
-                    "3": "DoS (Inundación)",
-                    "4": "DDoS",
+                    "Port_Scanner": "Escaneo de Puertos",
+                    "2": "Exploit / Fuerza Bruta",
+                    "Posible_Exploit": "Exploit / Fuerza Bruta",
+                    "3": "Inundación SYN",
+                    "SYN_Flood": "Inundación SYN",
+                    "4": "Inundación UDP",
+                    "UDP_Flood": "Inundación UDP",
+                    "5": "DDoS Distribuido",
+                    "DDoS_Distribuido": "DDoS Distribuido",
+                    "6": "Inyección SQL",
+                    "Inyeccion_SQL": "Inyección SQL",
                 }
-                tipos_finales = [diccionario_ataques.get(t, t) for t in tipos_limpios]
+                # Coincidencia insensible a mayúsculas sobre las claves descriptivas
+                def _map(t):
+                    if t in diccionario_ataques:
+                        return diccionario_ataques[t]
+                    for k, v in diccionario_ataques.items():
+                        if t and k.isalpha() and k.lower() == t.lower():
+                            return v
+                    return t
+                tipos_finales = [_map(t) for t in tipos_limpios]
                 
                 cnt = Counter(tipos_finales)
                 if cnt:

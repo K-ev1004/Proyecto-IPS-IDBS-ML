@@ -20,6 +20,7 @@ import struct
 import ipaddress    
 import sqlite3      
 import joblib       
+import json         
 import pandas as pd
 import numpy as np
 
@@ -167,27 +168,79 @@ def ip_en_rangos(ip: str) -> bool:
 
 
 # =============================================================================
-# CARGA DE MODELOS V4
+# CARGA DE MODELOS V5 + SQLIGUARD (2a etapa)
 # =============================================================================
-model_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'pipeline_catboost_v4.pkl')
-features_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'selected_features_v4.pkl')
-le_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'label_encoder_v4.pkl')
+model_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'pipeline_catboost_v5.pkl')
+features_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'selected_features_v5.pkl')
+le_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'label_encoder_v5.pkl')
+
+sqli_guard_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'sqli_guard.pkl')
+sqli_guard_meta_path = os.path.join(BASE_DIR, 'Modelos_Entrenados', 'sql_guard_features.pkl')
 
 modelo_ml = None
 features_seleccionadas = None
 tipo_ataque_encoder = None
+
+sqli_guard = None
+SQLI_GUARD_FEATURES = None
+UMBRAL_SQLI_GUARD = 0.30
 
 if os.path.exists(model_path) and os.path.exists(features_path) and os.path.exists(le_path):
     try:
         modelo_ml = joblib.load(model_path)
         features_seleccionadas = joblib.load(features_path)
         tipo_ataque_encoder = joblib.load(le_path)
-        print("[OK] Modelo ML v4 (Multi-Dataset) cargado correctamente.")
+        print("[OK] Modelo ML v5 (Multi-Dataset) cargado correctamente.")
     except Exception as e:
-        print(f"[X] Error cargando modelo v4: {e}")
+        print(f"[X] Error cargando modelo v5: {e}")
         modelo_ml = None
 else:
-    print("[!] No se encontró modelo ML v4. Se usará solo detección heurística.")
+    print("[!] No se encontró modelo ML v5. Se usará solo detección heurística.")
+
+# SQLiGuard: detector binario dedicado de Inyeccion SQL (2ª etapa)
+if os.path.exists(sqli_guard_path) and os.path.exists(sqli_guard_meta_path):
+    try:
+        sqli_guard = joblib.load(sqli_guard_path)
+        _sqli_meta = joblib.load(sqli_guard_meta_path)
+        SQLI_GUARD_FEATURES = _sqli_meta['features']
+        UMBRAL_SQLI_GUARD = float(_sqli_meta.get('umbral', 0.30))
+        print("[OK] SQLiGuard (detector binario SQLi) cargado correctamente.")
+        print(f"       Umbral confirmación SQLi: {UMBRAL_SQLI_GUARD}")
+    except Exception as e:
+        print(f"[X] Error cargando SQLiGuard: {e}")
+        sqli_guard = None
+else:
+    print("[!] No se encontró SQLiGuard. La clase Inyeccion_SQL dependerá solo del modelo v5.")
+
+# Convierte las features CIC del flujo en las features NetFlow que espera
+# SQLiGuard (mismas unidades y orden usados en entrenar_sqli_guard.py).
+def _features_sqli_guard(features_dict):
+    fwd_pkts  = float(features_dict.get('Tot Fwd Pkts', 0) or 0)
+    bwd_pkts  = float(features_dict.get('Tot Bwd Pkts', 0) or 0)
+    fwd_bytes = float(features_dict.get('TotLen Fwd Pkts', 0) or 0)
+    bwd_bytes = float(features_dict.get('TotLen Bwd Pkts', 0) or 0)
+    # 'Flow Duration' está en microsegundos (CIC); SQLiGuard se entrenó en ms.
+    dur_ms = max(float(features_dict.get('Flow Duration', 0) or 0) / 1000.0, 1e-6)
+    # Bitmask TCP OR (0-31) reconstruido desde los contadores de flags.
+    tcp_flags = 0
+    if float(features_dict.get('FIN Flag Cnt', 0) or 0) > 0: tcp_flags |= 1
+    if float(features_dict.get('SYN Flag Cnt', 0) or 0) > 0: tcp_flags |= 2
+    if float(features_dict.get('RST Flag Cnt', 0) or 0) > 0: tcp_flags |= 4
+    if float(features_dict.get('PSH Flag Cnt', 0) or 0) > 0: tcp_flags |= 8
+    if float(features_dict.get('ACK Flag Cnt', 0) or 0) > 0: tcp_flags |= 16
+    total_pkts = fwd_pkts + bwd_pkts
+    total_bytes = fwd_bytes + bwd_bytes
+    return {
+        'src_port':       float(features_dict.get('Src Port', 0) or 0),
+        'dst_port':       float(features_dict.get('Dst Port', 0) or 0),
+        'protocol':       float(features_dict.get('Protocol', 0) or 0),
+        'flow_duration_ms': dur_ms,
+        'total_packets':  total_pkts,
+        'total_bytes':    total_bytes,
+        'flow_byts_s':    float(features_dict.get('Flow Byts/s', 0) or 0),
+        'flow_pkts_s':    float(features_dict.get('Flow Pkts/s', 0) or 0),
+        'tcp_flags':      float(tcp_flags),
+    }
 
 
 # =============================================================================
@@ -204,9 +257,21 @@ cursor.execute('''
         tipo_ataque TEXT,
         ip_src     TEXT,
         protocolo  TEXT,
-        puerto     INTEGER
+        puerto     INTEGER,
+        confianza_ml REAL DEFAULT 0.0,
+        features_json TEXT
     )
 ''')
+
+# ALTER para bases SQLite ya existentes (compatible si ya existen las columnas)
+try:
+    cursor.execute("ALTER TABLE ataques ADD COLUMN confianza_ml REAL DEFAULT 0.0")
+except sqlite3.OperationalError:
+    pass  # la columna ya existe
+try:
+    cursor.execute("ALTER TABLE ataques ADD COLUMN features_json TEXT")
+except sqlite3.OperationalError:
+    pass  # la columna ya existe
 
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS bloqueos (
@@ -227,34 +292,70 @@ def _enviar_alerta_async(mensaje: str):
 # =============================================================================
 # FUNCIÓN DE PREDICCIÓN ML (CALLBACK DE FLUJOS_RED)
 # =============================================================================
+# Umbral unificado de logueo/bloqueo para clasificaciones ML (v3):
+# antes se logueaba con >=0.85 y se bloqueaba con >=0.70 (inconsistente:
+# había flujos bloqueados sin registro ML). Ahora AMBOS usan >= UMBRAL_ML.
+UMBRAL_ML = 0.85
+
 def on_flow_ready(ip_src, ip_dst, features_dict):
     """
     Este callback es llamado por flujos_red.py cuando un flujo expira/se completa.
+    Flujo de decisión v3:
+      1) El modelo v5 (multiclase, features CIC) predice la clase del flujo.
+      2) SQLiGuard (detector binario, 200K SQLi reales) CONFIRMA/NIEGA el SQLi.
+         - Si SQLiGuard confirma (P >= umbral) -> Inyeccion_SQL (precision ~99.8%).
+         - Si v5 decía Inyeccion_SQL pero SQLiGuard no confirma -> se trata como
+           la clase que v5 asigna para la otra rama pero se registra el caso.
     """
     if modelo_ml is None or features_seleccionadas is None:
         return
-        
+
     try:
         row = [features_dict.get(f, 0) for f in features_seleccionadas]
         df_in = pd.DataFrame([row], columns=features_seleccionadas)
-        
+
         pred_idx = modelo_ml.predict(df_in)[0]
         if isinstance(pred_idx, (list, np.ndarray)):
             pred_idx = pred_idx[0]
-            
+
         probs = modelo_ml.predict_proba(df_in)[0]
-        confianza = float(np.max(probs))
-        
+        confianza_v5 = float(np.max(probs))
         tipo_str = tipo_ataque_encoder.inverse_transform([pred_idx])[0]
-        
-        # Actualizar riesgo global en dashboard
-        if tipo_str != 'Normal':
-            if confianza >= 0.85:
-                metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza * 10))
-                guardar_ataque(ip_src, tipo_str, "TCP/UDP", features_dict.get('Dst Port', 0), ip_dst, flag="N/A", es_ml_puro=True, confianza_ml=confianza)
+
+        # --- SQLiGuard (2ª etapa) ---
+        confianza_guard = 0.0
+        es_sqli_guard = False
+        if sqli_guard is not None and SQLI_GUARD_FEATURES is not None:
+            try:
+                fila_guard = {k: _features_sqli_guard(features_dict)[k] for k in SQLI_GUARD_FEATURES}
+                df_guard = pd.DataFrame([fila_guard], columns=SQLI_GUARD_FEATURES)
+                prob_guard = sqli_guard.predict_proba(df_guard)[0][1]
+                confianza_guard = float(prob_guard)
+                es_sqli_guard = confianza_guard >= UMBRAL_SQLI_GUARD
+            except Exception as e:
+                print(f"[X] Error SQLiGuard: {e}")
+
+        # --- Decisión final ---
+        if es_sqli_guard:
+            # SQLiGuard confirma SQLi: decisión de alta precisión (~99.8%)
+            tipo_final = 'Inyeccion_SQL'
+            confianza_ml = max(confianza_guard, confianza_v5)
+            metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza_ml * 10))
+            guardar_ataque(ip_src, tipo_final, "TCP/UDP", features_dict.get('Dst Port', 0),
+                           ip_dst, flag="SQLiGuard", es_ml_puro=True, confianza_ml=confianza_ml,
+                           features_json=json.dumps(_features_sqli_guard(features_dict)))
+        elif tipo_str != 'Normal':
+            if confianza_v5 >= UMBRAL_ML:
+                metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza_v5 * 10))
+                guardar_ataque(ip_src, tipo_str, "TCP/UDP", features_dict.get('Dst Port', 0),
+                               ip_dst, flag="N/A", es_ml_puro=True, confianza_ml=confianza_v5,
+                               features_json=json.dumps(_features_sqli_guard(features_dict)))
+            else:
+                # v5 sospechó ataque pero bajo el umbral unificado: no loguear.
+                metricas_trafico['riesgo_global'] = max(0.0, metricas_trafico['riesgo_global'] - 0.5)
         else:
             metricas_trafico['riesgo_global'] = max(0.0, metricas_trafico['riesgo_global'] - 0.5)
-            
+
     except Exception as e:
         print(f"[X] Advertencia en ML Predict Flow: {e}")
 
@@ -265,7 +366,7 @@ flow_tracker = FlowTracker(on_flow_ready)
 # =============================================================================
 # FUNCIÓN: guardar_ataque
 # =============================================================================
-def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA", flag="N/A", es_ml_puro=False, confianza_ml=0.0):
+def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA", flag="N/A", es_ml_puro=False, confianza_ml=0.0, features_json=None):
     if ip_src == MI_IP:
         return
 
@@ -296,9 +397,9 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
     # Persistencia en SQLite
     try:
         cursor.execute('''
-            INSERT INTO ataques (timestamp, tipo_ataque, ip_src, protocolo, puerto)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (timestamp, tipo_final, ip_src, protocolo, puerto))
+            INSERT INTO ataques (timestamp, tipo_ataque, ip_src, protocolo, puerto, confianza_ml, features_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (timestamp, tipo_final, ip_src, protocolo, puerto, confianza_ml, features_json))
         conn.commit()
     except Exception as e:
         pass
@@ -326,7 +427,7 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
         puede_bloquear = False
         if es_critico:
             if es_ml_puro:
-                if confianza_ml >= 0.70:
+                if confianza_ml >= UMBRAL_ML:
                     puede_bloquear = True
             else:
                 puede_bloquear = True
@@ -357,7 +458,7 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
                 pass
 
             # Registrar el bloqueo en el archivo .log
-            registrar_bloqueo_log(ip_src, f"BLOQUEO_{accion.upper().replace(' ', '_')}", duracion)
+            registrar_bloqueo_log(ip_src, f"BLOQUEO_{tipo_ataque.upper().replace(' ', '_')}", duracion)
 
             accion = "Bloqueo real (MikroTik)" if bloqueo_real else "Alerta Semi-Autónoma"
             comunicador.nuevo_bloqueo.emit([ip_src, accion, duracion, tipo_ataque, severidad_ips])

@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import os
 import gc
+from tqdm import tqdm
 
 # ============================================================
 # CONFIGURACIÓN
@@ -89,6 +90,18 @@ def normalizar_columnas(df):
     df.columns = df.columns.str.strip()
     return df
 
+# Carácter de reemplazo (U+FFFD) que aparece corrupto en algunos CSVs de 2017
+# y que impide mapear correctamente los ataques web (Web Attack � XSS, etc.)
+_replace_caracter = {'\ufffd': '-', '\u2013': '-', '\u2014': '-'}
+
+def _normalizar_label(valor):
+    if not isinstance(valor, str):
+        return valor
+    for origen, destino in _replace_caracter.items():
+        if origen in valor:
+            valor = valor.replace(origen, destino)
+    return valor
+
 def procesar_chunk(chunk):
     chunk = normalizar_columnas(chunk)
     if 'Destination Port' in chunk.columns:
@@ -96,6 +109,8 @@ def procesar_chunk(chunk):
     
     if 'Label' in chunk.columns:
         chunk = chunk[chunk['Label'] != 'Label']
+        # Normalizar caracteres corruptos (U+FFFD, guiones) antes del mapeo
+        chunk['Label'] = chunk['Label'].map(_normalizar_label)
         chunk['Label_UNIPAZ'] = chunk['Label'].map(MAPEO_CLASES)
         chunk = chunk.dropna(subset=['Label_UNIPAZ'])
         
@@ -121,7 +136,7 @@ def procesar_carpeta(carpeta_path, origen_nombre):
     
     posibles_features = FEATURES_V4 + ['Label', 'Destination Port']
     
-    for archivo in archivos:
+    for archivo in tqdm(archivos, desc=f"Procesando {origen_nombre}", unit="archivo", ncols=100):
         ruta = os.path.join(carpeta_path, archivo)
         print(f"    -> Leyendo: {archivo}")
         
@@ -138,7 +153,8 @@ def procesar_carpeta(carpeta_path, origen_nombre):
                 # Seleccionar columnas que tras hacer strip() sean válidas
                 cols_a_leer = [c for c in header.columns if c.strip() in posibles_features]
                 
-                for chunk in pd.read_csv(ruta, usecols=cols_a_leer, chunksize=250000, low_memory=False):
+                for chunk in tqdm(pd.read_csv(ruta, usecols=cols_a_leer, chunksize=250000, low_memory=False),
+                                  desc=f"    chunk {archivo}", unit="chunk", ncols=100, leave=False):
                     chunk_proc = procesar_chunk(chunk)
                     if not chunk_proc.empty:
                         chunks_procesados.append(chunk_proc)
@@ -160,7 +176,9 @@ def aplicar_downsampling(df):
     print("\n[*] Aplicando Downsampling Inteligente...")
     df_final_chunks = []
     
-    for clase in df['Label_UNIPAZ'].unique():
+    clases = sorted(df['Label_UNIPAZ'].unique())
+    
+    for clase in tqdm(clases, desc="Balanceando clases", unit="clase", ncols=100):
         subset = df[df['Label_UNIPAZ'] == clase]
         limite = LIMITES_CLASE.get(clase)
         
@@ -197,12 +215,15 @@ if __name__ == "__main__":
     df_total = aplicar_downsampling(df_total)
     df_total = df_total.sample(frac=1, random_state=RANDOM_STATE).reset_index(drop=True)
     
-    ruta_csv = os.path.join(OUTPUT_DIR, "dataset_global_unipaz_v4.csv")
+    ruta_csv = os.path.join(OUTPUT_DIR, "dataset_global_unipaz_v5.csv")
     print(f"\n[*] Guardando dataset definitivo en: {ruta_csv}")
     df_total.to_csv(ruta_csv, index=False)
     
     print("\n======================================================")
-    print(" RESUMEN FINAL DEL DATASET")
+    print(" RESUMEN FINAL DEL DATASET v5")
     print("======================================================")
-    print(df_total['Label_UNIPAZ'].value_counts())
-    print("\n  [OK] Dataset global generado exitosamente. Listo para CEREBRO_V4.")
+    resumen = df_total['Label_UNIPAZ'].value_counts()
+    print(resumen)
+    sql = resumen.get('Inyeccion_SQL', 0)
+    print(f"\n  [!] Inyeccion_SQL en v5: {sql:,} (objetivo >3000, recuperado del bug U+FFFD de 2017)")
+    print("\n  [OK] Dataset global v5 generado exitosamente. Listo para CEREBRO_V5.")

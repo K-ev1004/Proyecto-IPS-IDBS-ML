@@ -1,0 +1,44 @@
+{
+  "T1": {
+    "total_flujos": 150000,
+    "accuracy": 0.8629,
+    "f1_macro": 0.7423,
+    "tiempo_pred_s": 1.44,
+    "clases": 7,
+    "sql_prec_v5": 0.0662,
+    "sql_rec_v5": 0.9355
+  },
+  "T2": {
+    "total_flujos": 57229,
+    "precision": 0.9985,
+    "recall": 0.7534,
+    "f1": 0.8588,
+    "tn": 28582,
+    "fp": 33,
+    "fn": 7055,
+    "tp": 21559,
+    "tasa_fp_benigno": 0.00115,
+    "tiempo_pred_s": 0.02,
+    "umbral": 0.3
+  },
+  "T3": {
+    "flujos_procesados": 6000,
+    "sql_persistidos": 2343,
+    "con_trazabilidad_features_json": 2390,
+    "tiempo_cadena_s": 50.45,
+    "filas_en_bd_tmp": 2390,
+    "precision_cadena": 0.9983,
+    "recall_cadena": 0.7797,
+    "tp": 2339,
+    "fp": 4,
+    "fn": 661
+  },
+  "T4": {
+    "archivos_log": [
+      "logsciberseguridad 2026-07-28 al 2026-08-04.log",
+      "logs_bloqueos.log"
+    ],
+    "linea_bloqueo_escrita": true,
+    "ruta_bloqueos": "C:\\IDS-IPS\\Proyecto-IPS-IDBS-ML\\logs_ciberseguridad\\logs_bloqueos.log"
+  }
+}

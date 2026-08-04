@@ -691,6 +691,11 @@ class IDSInterface(FluentWindow):
         self.timer_guardar_csv_diario.timeout.connect(self.guardar_csv_diario)
         self.timer_guardar_csv_diario.start(24 * 60 * 60 * 1000)
 
+        self.timer_log_semanal = QTimer()
+        self.timer_log_semanal.timeout.connect(self.exportar_logs_semanales)
+        # 7 días en milisegundos
+        self.timer_log_semanal.start(7 * 24 * 60 * 60 * 1000)
+
     def setup_signals(self):
         self.table.setMouseTracking(False)
         if ids and hasattr(ids, 'comunicador'):
@@ -1510,13 +1515,24 @@ class IDSInterface(FluentWindow):
         except Exception as e:
             logging.error(f"Error guardando CSV diario: {e}")
 
+    def exportar_logs_semanales(self):
+        try:
+            from log_exporter import exportar_logs_semanales as _export
+            try:
+                ruta = _export()
+                self.mostrar_mensaje("Backup Semanal", f"Logs exportados a: {ruta}", "info")
+            except Exception as e:
+                logging.error(f"Error en exportador de logs semanales: {e}")
+        except Exception as e:
+            logging.error(f"Error importando exportador de logs semanales: {e}")
+
     def closeEvent(self, event):
         try:
             if self.monitoreo_activo:
                 self.detener_monitoreo()
 
             for t in [self.timer, self.graf_timer,
-                      self.timer_guardar_diario, self.timer_guardar_csv_diario]:
+                      self.timer_guardar_diario, self.timer_guardar_csv_diario, self.timer_log_semanal]:
                 t.stop()
 
             self.data_processor.stop()
@@ -1604,6 +1620,14 @@ if __name__ == "__main__":
         ventana.show()
         print("IDS Interface Fluent Optimizada iniciada")
         print(f"Límites: Tabla={MAX_EVENTOS_TABLA} | Memoria={MAX_EVENTOS_MEMORIA} | Tráfico={MAX_TRAFICO_LINEAS}")
+        
+        # Ejecutar exportación semanal inicial para verificar que existe la carpeta
+        try:
+            from log_exporter import exportar_logs_semanales as _export
+            _export()
+        except Exception as e:
+            logging.error(f"Error inicial exportando logs: {e}")
+        
         sys.exit(app.exec_())
     except Exception as e:
         logging.error(f"Error en la ejecución principal: {e}")

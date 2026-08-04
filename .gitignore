@@ -24,6 +24,7 @@ env/
 evidencia/
 *.log
 logs_bloqueos.txt
+logs_bloqueos.log
 
 # Datasets y Numpy Arrays pesados (>100MB)
 Dataset/

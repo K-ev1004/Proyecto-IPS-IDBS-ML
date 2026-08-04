@@ -1,0 +1,1 @@
+cambiar formato de exportacion de log, de una base de datos a un .log, con la misma informacion, hacerlo de manera automatica cada semana, y exportarlo a una carpeta externa, donde el archivo tendra por nombre algo como logsciberseguridad (fecha de la semana), y cambiar el formato de los log de bloqueos de .txt a .log, tambien em formato igual a laterior,

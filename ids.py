@@ -37,6 +37,9 @@ from telegram_alert import enviar_alerta
 import mikrotik_api
 from flujos_red import FlowTracker
 
+# Importar el módulo de exportador de logs
+from log_exporter import registrar_bloqueo_log
+
 # PyQt5: Señales para comunicación entre el motor IDS y la interfaz gráfica
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -352,6 +355,9 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
                 conn.commit()
             except Exception:
                 pass
+
+            # Registrar el bloqueo en el archivo .log
+            registrar_bloqueo_log(ip_src, f"BLOQUEO_{accion.upper().replace(' ', '_')}", duracion)
 
             accion = "Bloqueo real (MikroTik)" if bloqueo_real else "Alerta Semi-Autónoma"
             comunicador.nuevo_bloqueo.emit([ip_src, accion, duracion, tipo_ataque, severidad_ips])

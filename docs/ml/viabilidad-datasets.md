@@ -1,5 +1,11 @@
 # 📊 Viabilidad del Dataset CSE-CIC-IDS2018 — Análisis Completo
 
+> [!WARNING] Documento histórico
+> Análisis previo al pipeline unificado v5. El pipeline actual (`generador_dataset_global.py`)
+> combina **CIC-IDS2017 + CSE-CIC-IDS2018 + CIC-DDoS2019** y recupera los ataques web 2017
+> perdidos por el bug de encoding U+FFFD (ver [`../adr/0001-pipeline-datos-v5.md`](../adr/0001-pipeline-datos-v5.md)).
+> La escasez de SQLi aquí descrita se resolvió con el detector binario **SQLiGuard**.
+
 > **Fecha:** 2 de junio de 2026  
 > **Dataset en disco:** `c:\IDS-IPS\Proyecto-IPS-IDBS-ML\CSE-CIC-IDS2018\`  
 > **Muestra analizada:** 200,000 filas por archivo (2,000,000 total)

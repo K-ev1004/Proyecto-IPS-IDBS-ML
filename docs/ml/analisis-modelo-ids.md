@@ -1,5 +1,10 @@
 # 🛡️ Análisis Técnico del Sistema IDS/IPS con ML — UNIPAZ
 
+> [!WARNING] Documento histórico (v2/v3)
+> Este análisis corresponde al **estado del sistema hasta junio de 2026 (modelos v2/v3)**.
+> El modelo en producción actual es **CatBoost v5 + SQLiGuard** (v. infra).
+> Ver métricas actuales en [`../guias/entrenamiento.md`](../guias/entrenamiento.md) y decisiones en [`../adr/`](../adr/).
+
 > **Fecha del análisis:** 2 de junio de 2026  
 > **Herramientas usadas:** Skills de Machine Learning, Scikit-learn, Senior Data Scientist, Pandas Pro
 

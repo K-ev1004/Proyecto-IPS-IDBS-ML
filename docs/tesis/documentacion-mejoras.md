@@ -1,5 +1,10 @@
 # Documentación de Mejoras: Sistema de Detección y Prevención de Intrusiones (IDS/IPS) UNIPAZ
 
+> [!WARNING] Documento histórico
+> Registro de mejoras de una fase anterior (umbrales antiguos, modelo v3 91.9%).
+> Para el estado actual del motor (v5 + SQLiGuard, umbral unificado 0.85) ver
+> [`../CHANGELOG.md`](../CHANGELOG.md) y [`../guias/`](../guias/).
+
 Este documento resume todas las correcciones, mejoras visuales y de arquitectura implementadas en el proyecto del IDS/IPS basado en Python, Scapy y Machine Learning.
 
 ---

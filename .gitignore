@@ -3,6 +3,8 @@ intrusiones.db
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Archivos y carpetas CIC
 datasets/
@@ -25,6 +27,7 @@ evidencia/
 *.log
 logs_bloqueos.txt
 logs_bloqueos.log
+ids_interface.log
 
 # Datasets y Numpy Arrays pesados (>100MB)
 Dataset/

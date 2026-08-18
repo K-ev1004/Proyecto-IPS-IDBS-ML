@@ -1,3 +1,10 @@
+# CHANGELOG · IDS/IPS UNIPAZ
+
+> Historial verificado del sistema. Documentación relacionada:
+> [README](../README.md) · [Guias](./guias/) · [ADRs](./adr/)
+
+## Última entrada
+
 TAREAS IDS/IPS - ESTADO
 
 [1] ✔ LOGS .LOG SEMANALES (log_exporter.py)

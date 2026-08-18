@@ -1,0 +1,166 @@
+================================================================================
+DOCUMENTACIÓN DE ENTRENAMIENTO — MODELO v5 + SQLiGuard
+Sistema IDS/IPS con Machine Learning (UNIPAZ)
+================================================================================
+
+-------------------------------------------------------------------------------
+1. NOMBRE Y VERSIÓN
+-------------------------------------------------------------------------------
+- Modelo multiclase: CatBoost v5 (7 clases UNIPAZ).
+- Detector binario 2.ª etapa: SQLiGuard (especializado en Inyección SQL).
+
+Artefactos en Modelos_Entrenados/:
+  - pipeline_catboost_v5.pkl      (125.7 MB)
+  - label_encoder_v5.pkl
+  - selected_features_v5.pkl
+  - sqli_guard.pkl
+  - sql_guard_features.pkl
+  - metricas_v5.txt
+  - metricas_sqli_guard.txt
+
+-------------------------------------------------------------------------------
+2. ADQUISICIÓN DE DATOS (de dónde salieron los datos de entrenamiento)
+-------------------------------------------------------------------------------
+Dataset multiclase v5:
+  - Fuentes: CIC-IDS2017 + CSE-CIC-IDS2018 + CIC-DDoS2019
+    (datasets académicos del Canadian Institute for Cybersecurity).
+  - Carpeta de origen: datasets/CIC-IDS2017, datasets/CSE-CIC-IDS2018,
+    datasets/CIC-DDoS2019.
+  - Consolidado: Dataset_Limpio/dataset_global_unipaz_v5.csv
+    Generado con: generador_dataset_global.py
+    Total de registros: 3 738 678.
+  - Clase Inyeccion_SQL: pasó de 928 a 3 108 muestras después de corregir el
+    bug de encoding U+FFFD que corrompía las etiquetas de los ataques web 2017.
+
+Dataset SQLiGuard:
+  - Fuente externa: "SQL Injection Attack Netflow" (Zenodo 6907252).
+  - D1_train.csv (52.7 MB): ~200 000 ataques SQLi tipo Union (MySQL/SQLServer).
+    Se usa para ENTRENAR.
+  - D2_test.csv (7.5 MB): 28 614 ataques SQLi tipo Blind (PostgreSQL, red
+    distinta). Se usa como TEST EXTERNO independiente (nunca se vio en entrenamiento).
+
+-------------------------------------------------------------------------------
+3. ALGORITMO Y CONFIGURACIÓN (cómo se entrenó)
+-------------------------------------------------------------------------------
+Modelo v5 (CEREBRO_V5.py):
+  Pipeline: ImbPipeline[ StandardScaler -> SMOTE(k=5) -> CatBoostClassifier ]
+  - SMOTE focalizado (sampling_strategy por dict):
+      Inyeccion_SQL   -> 30 000 muestras
+      Posible_Exploit -> 60 000 muestras
+    Las clases masivas (Normal, DDoS...) no se tocan (evita explotar la RAM).
+  - CatBoost:
+      iterations          = 2000
+      learning_rate       = 0.08
+      depth               = 10
+      task_type           = GPU
+      eval_metric         = MultiClass
+      od_type / od_wait   = Iter / 200 (early stopping)
+      auto_class_weights  = Balanced
+  - Pesos manuales por clase (mayor peso = más prioridad):
+      Normal: 1.0 | DDoS_Distribuido: 1.0 | SYN_Flood: 1.2 | UDP_Flood: 1.2
+      Port_Scanner: 1.5 | Posible_Exploit: 2.0 | Inyeccion_SQL: 12.0
+  - Split train/test: 80/20 estratificado, random_state=42. El test se deja
+    intacto (sin data leakage).
+  - Tiempo de entrenamiento: ~4.8 minutos en GPU.
+
+  Features usadas (23, estilo CICFlowMeter):
+      Dst Port, Protocol, Flow Duration, Tot Fwd Pkts, Tot Bwd Pkts,
+      TotLen Fwd Pkts, TotLen Bwd Pkts, Fwd Pkt Len Max, Fwd Pkt Len Min,
+      Fwd Pkt Len Mean, Fwd Pkt Len Std, Bwd Pkt Len Max, Bwd Pkt Len Min,
+      Bwd Pkt Len Mean, Bwd Pkt Len Std, Flow Byts/s, Flow Pkts/s,
+      FIN Flag Cnt, SYN Flag Cnt, RST Flag Cnt, PSH Flag Cnt,
+      ACK Flag Cnt, URG Flag Cnt.
+
+SQLiGuard (entrenar_sqli_guard.py):
+  Pipeline: Pipeline[ StandardScaler -> CatBoostClassifier ]
+  - CatBoost:
+      iterations    = 1500
+      learning_rate = 0.08
+      depth         = 8
+      loss_function = Logloss
+      task_type     = GPU
+  - Umbral de confirmación: 0.30 (se elige bajo para maximizar recall de SQLi
+    manteniendo precisión ~99.8%).
+  - Features NetFlow (9):
+      src_port, dst_port, protocol, flow_duration_ms, total_packets,
+      total_bytes, flow_byts_s, flow_pkts_s, tcp_flags
+
+-------------------------------------------------------------------------------
+4. EFECTIVIDAD / MÉTRICAS
+-------------------------------------------------------------------------------
+Modelo v5 (test set, 747 736 registros):
+  Accuracy   : 0.8641
+  F1-Macro   : 0.7442
+  Kappa      : 0.8138
+
+  Reporte por clase:
+    Clase              precision   recall   f1-score   support
+    DDoS_Distribuido      0.92      0.83      0.87     200000
+    Inyeccion_SQL         0.07      0.93      0.12        622
+    Normal                0.93      0.94      0.93     300000
+    Port_Scanner          0.87      1.00      0.93      31786
+    Posible_Exploit       0.87      0.76      0.81     111353
+    SYN_Flood             0.68      0.77      0.72     100000
+    UDP_Flood             0.69      1.00      0.82       3975
+    -----------------------------------------------
+    accuracy                           0.86     747736
+    macro avg            0.72      0.89      0.74     747736
+    weighted avg         0.88      0.86      0.87     747736
+
+  Interpretación: el rebalanceo consiguió que v5 detecte el 93% de los SQLi
+  reales (recall alto), pero aún genera falsos positivos en SQLi (precisión 7%).
+  Por eso existe SQLiGuard como 2.ª etapa de confirmación.
+
+SQLiGuard (test externo D2, 57 229 flujos):
+  Accuracy   : 0.8386
+  Precision  : 0.9985   (con umbral 0.30)
+  Recall     : 0.7534
+  F1         : 0.8588
+  Matriz: TN=28 582 | FP=33 | FN=7 055 | TP=21 559
+  Tasa de falsos positivos sobre benignos: 0.115%
+
+  Reporte:
+    Clase              precision   recall   f1-score   support
+    Benigno               0.76      1.00      0.86      28615
+    Inyeccion_SQL         1.00      0.68      0.81      28614
+
+Prueba masiva (test_masivo.py -> informe_test_masivo.json):
+  T1. Modelo v5 sobre 150 000 flujos:
+      accuracy 0.8629 | F1-macro 0.7423 | tiempo predicción 1.44 s
+      SQLi: precision 6.62% | recall 93.55%
+  T2. SQLiGuard sobre 57 229 flujos D2:
+      precisión 99.85% | recall 75.34% | F1 0.8588 | FP 33 | 0.02 s
+  T3. Cadena completa (v5 + SQLiGuard + umbrales + BD temporal), 6 000 flujos:
+      precisión 99.83% | recall 77.97% | TP 2339 | FP 4 | FN 661
+      2 390 filas persistidas con trazabilidad (features_json)
+  T4. Exportador de logs: escritura .log verificada.
+
+-------------------------------------------------------------------------------
+5. UMBRALES OPERATIVOS (producción, ids.py)
+-------------------------------------------------------------------------------
+  UMBRAL_ML         = 0.85   -> confianza mínima para loguear y bloquear ML.
+  UMBRAL_SQLI_GUARD = 0.30   -> probabilidad mínima de SQLiGuard para
+                                confirmar la clase Inyeccion_SQL.
+  Decisión:
+    - Si SQLiGuard confirma (P >= 0.30) -> tipo_final = Inyeccion_SQL,
+      confianza_ml = max(confianza_guard, confianza_v5), flag="SQLiGuard".
+    - Si v5 decía SQLi pero SQLiGuard no confirma -> NO se loguea (menos
+      falsos positivos).
+    - Resto de clases: se loguea solo si confianza_v5 >= 0.85.
+  Trazabilidad: la BD guarda confianza_ml y features_json por cada evento ML.
+
+-------------------------------------------------------------------------------
+6. LIMITACIONES CONOCIDAS
+-------------------------------------------------------------------------------
+  - La precisión de Inyeccion_SQL en el multiclase v5 es baja (7%) por la
+    escasez de muestras reales; se mitiga con SQLiGuard.
+  - Las métricas de SQLiGuard provienen de test externo (D2, Zenodo), no de
+    tráfico real del campus UNIPAZ.
+  - La latencia de detección -> bloqueo en red real NO se ha medido todavía.
+  - El % de falsos positivos con tráfico real del campus NO se ha medido.
+  - Para mayor recall de SQLi se puede bajar UMBRAL_SQLI_GUARD a 0.10
+    (recall ~83% manteniendo precisión ~99.8%).
+
+================================================================================
+FIN DEL DOCUMENTO
+================================================================================

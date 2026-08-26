@@ -1,0 +1,3 @@
+mirar error de exportacion de logs semanales ": name '_ts_en_tango' is not defined"
+y ver agragados para mayor informacion de los dispositivos de de donde salio el ataque y a donde fue dirigido, como ubicaion, datos del dispositivo, etc.
+agregar hashes a los logs, para y tener la seguridad de que el log no ha sido modificado, y la informcion sea valida, siguiendo las metricas de por el ministerio de las TIC.

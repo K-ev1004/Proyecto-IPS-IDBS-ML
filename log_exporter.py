@@ -44,7 +44,8 @@ def obtener_carpeta_logs():
 
 # =============================================================================
 # FUNCIÓN AUXILIAR: _ts_en_rango
-# =============================================================================def _ts_en_rango(timestamp_str, inicio, fin):
+# =============================================================================
+def _ts_en_rango(timestamp_str, inicio, fin):
     """
     Determina si un timestamp (formato time.ctime(), p.ej.
     'Fri Apr 24 09:00:30 2026') cae dentro del rango [inicio, fin].

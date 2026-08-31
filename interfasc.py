@@ -1214,17 +1214,19 @@ class IDSInterface(FluentWindow):
             evidencia = [f"<li>Protocolo/Flag: <b>{proto} / {flag}</b></li>"]
             if "syn flood"   in tipo.lower(): evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
             if "ddos"        in tipo.lower(): evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
-            if "escaneo"     in tipo.lower(): evidencia.append("<li>Indicador: múltiples puertos probados desde una misma IP</li>")
-            if "sql"         in tipo.lower(): evidencia.append("<li>Indicador: patrón de payload compatible con SQLi</li>")
+            if "escaneo"     in tipo.lower(): evidencia.append("<li>Indicador: multiples puertos probados desde una misma IP</li>")
+            if "sql"         in tipo.lower(): evidencia.append("<li>Indicador: patron de payload compatible con SQLi</li>")
 
             color_sev = self._compute_severity(tipo)[1]
             txt_color = "#e1dfdd" if self.modo_oscuro else "#333333"
 
             geo_html = ""
-            geo_pais = ""
-            geo_ciudad = ""
             if obtener_ubicacion_ip and generar_mapa_pixmap:
                 ubicacion = obtener_ubicacion_ip(ip_src)
+
+                hostname = ubicacion.get("hostname", "Dispositivo Desconocido")
+                subred = ubicacion.get("subred", "Desconocida")
+                es_privada = ubicacion.get("status") == "private"
                 geo_pais = ubicacion.get("country", "Desconocido")
                 geo_ciudad = ubicacion.get("city", "Desconocido")
                 geo_region = ubicacion.get("regionName", "Desconocido")
@@ -1234,17 +1236,36 @@ class IDSInterface(FluentWindow):
                 geo_lat = ubicacion.get("lat", 0.0)
                 geo_lon = ubicacion.get("lon", 0.0)
 
-                geo_html = f"""
-                <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicación del Atacante</h4>
-                <table style="width: 100%; margin-bottom: 5px;">
-                    <tr><td style="padding: 2px 0;"><b>País:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
-                    <tr><td style="padding: 2px 0;"><b>Región:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
-                    <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
-                    <tr><td colspan="2" style="padding: 2px 0;"><b>ASN:</b> {geo_as}</td></tr>
-                </table>
-                """
+                if es_privada:
+                    tipo_red = "Red Local (IP Privada)"
+                    geo_html = f"""
+                    <h4 style="color: #ffb400; margin-bottom: 5px;">Dispositivo del Atacante</h4>
+                    <table style="width: 100%; margin-bottom: 10px;">
+                        <tr><td style="padding: 2px 0;"><b>Hostname:</b> {hostname}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
+                        <tr><td style="padding: 2px 0;"><b>Subred:</b> {subred}</td><td style="padding: 2px 0;"><b>Tipo:</b> {tipo_red}</td></tr>
+                    </table>
+                    <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicacion Aproximada (Router/ISP)</h4>
+                    <table style="width: 100%; margin-bottom: 5px;">
+                        <tr><td style="padding: 2px 0;"><b>Pais:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
+                        <tr><td style="padding: 2px 0;"><b>Region:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
+                        <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
+                        <tr><td colspan="2" style="padding: 2px 0; font-style: italic; color: #888;">Nota: Ubicacion del router, no del dispositivo</td></tr>
+                    </table>
+                    """
+                else:
+                    geo_html = f"""
+                    <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicacion del Atacante</h4>
+                    <table style="width: 100%; margin-bottom: 5px;">
+                        <tr><td style="padding: 2px 0;"><b>Hostname:</b> {hostname}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
+                        <tr><td style="padding: 2px 0;"><b>Pais:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
+                        <tr><td style="padding: 2px 0;"><b>Region:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
+                        <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
+                        <tr><td colspan="2" style="padding: 2px 0;"><b>ASN:</b> {geo_as}</td></tr>
+                    </table>
+                    """
 
-                pixmap = generar_mapa_pixmap(geo_lat, geo_lon, ip_src, geo_ciudad, geo_pais, color_sev)
+                pixmap = generar_mapa_pixmap(geo_lat, geo_lon, ip_src, geo_ciudad, geo_pais,
+                                             color_sev, hostname, es_privada)
                 scaled = pixmap.scaled(480, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.mapa_label.setPixmap(scaled)
             else:
@@ -1252,7 +1273,7 @@ class IDSInterface(FluentWindow):
 
             html_txt = f"""
             <div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; color: {txt_color};">
-                <h3 style="color: {color_sev}; margin-top: 0; margin-bottom: 10px;">Análisis Forense: {tipo}</h3>
+                <h3 style="color: {color_sev}; margin-top: 0; margin-bottom: 10px;">Analisis Forense: {tipo}</h3>
                 <p style="margin-top: 0;"><b>Severidad:</b> <span style="color:{color_sev}; font-weight:bold;">{sev}</span> &nbsp;&nbsp;|&nbsp;&nbsp; <b>Hora:</b> {hora}</p>
                 <table style="width: 100%; margin-bottom: 15px;">
                     <tr><td style="padding: 3px 0;"><b>IP Origen:</b> {ip_src}</td><td style="padding: 3px 0;"><b>IP Destino:</b> {ip_dst}</td></tr>
@@ -1267,7 +1288,7 @@ class IDSInterface(FluentWindow):
                 <ul style="margin-top: 0; padding-left: 20px;">
                     <li>Llamar al profesor Jhoni si la alarma persiste.</li>
                     <li>Revisar logs del servicio en el puerto destino.</li>
-                    <li>Bloquear/limitar tráfico desde la interfaz de IPS si es recurrente.</li>
+                    <li>Bloquear/limitar trafico desde la interfaz de IPS si es recurrente.</li>
                 </ul>
             </div>
             """

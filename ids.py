@@ -267,11 +267,27 @@ cursor.execute('''
 try:
     cursor.execute("ALTER TABLE ataques ADD COLUMN confianza_ml REAL DEFAULT 0.0")
 except sqlite3.OperationalError:
-    pass  # la columna ya existe
+    pass
 try:
     cursor.execute("ALTER TABLE ataques ADD COLUMN features_json TEXT")
 except sqlite3.OperationalError:
-    pass  # la columna ya existe
+    pass
+try:
+    cursor.execute("ALTER TABLE ataques ADD COLUMN ip_dst TEXT DEFAULT 'DESCONOCIDA'")
+except sqlite3.OperationalError:
+    pass
+try:
+    cursor.execute("ALTER TABLE ataques ADD COLUMN vlan_id INTEGER DEFAULT 0")
+except sqlite3.OperationalError:
+    pass
+try:
+    cursor.execute("ALTER TABLE ataques ADD COLUMN ttl INTEGER DEFAULT 0")
+except sqlite3.OperationalError:
+    pass
+try:
+    cursor.execute("ALTER TABLE ataques ADD COLUMN packet_size INTEGER DEFAULT 0")
+except sqlite3.OperationalError:
+    pass
 
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS bloqueos (
@@ -366,9 +382,20 @@ flow_tracker = FlowTracker(on_flow_ready)
 # =============================================================================
 # FUNCIÓN: guardar_ataque
 # =============================================================================
-def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA", flag="N/A", es_ml_puro=False, confianza_ml=0.0, features_json=None):
+def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA", flag="N/A", es_ml_puro=False, confianza_ml=0.0, features_json=None, vlan_id=0, ttl=0, packet_size=0):
     if ip_src == MI_IP:
         return
+
+    # Auto-completar datos del paquete desde el dict global
+    datos = _ultimo_datos_paquete.get(ip_src, {})
+    if not ip_dst or ip_dst == "DESCONOCIDA":
+        ip_dst = datos.get("ip_dst", "DESCONOCIDA")
+    if not vlan_id:
+        vlan_id = datos.get("vlan_id", 0)
+    if not ttl:
+        ttl = datos.get("ttl", 0)
+    if not packet_size:
+        packet_size = datos.get("packet_size", 0)
 
     # THROTTLE
     ahora = time.time()
@@ -382,30 +409,33 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
     if es_ml_puro:
         tipo_final = f"{tipo_ataque} (ML: {confianza_ml*100:.1f}%)"
     else:
-        tipo_final = f"{tipo_ataque} (Heurística)"
+        tipo_final = f"{tipo_ataque} (Heuristica)"
 
     # Mensaje de alerta
     mensaje = (
-        f"SISTEMA DE INTRUSIÓN:\n"
+        f"SISTEMA DE INTRUSION:\n"
         f"ALERT [IDS] {tipo_final} detectado\n"
         f"IP Origen: {ip_src}\n"
+        f"IP Destino: {ip_dst}\n"
         f"Protocolo: {protocolo}\n"
         f"Puerto Destino: {puerto}\n"
-        f"IP Destino: {ip_dst}\n"
     )
 
     # Persistencia en SQLite
     try:
         cursor.execute('''
-            INSERT INTO ataques (timestamp, tipo_ataque, ip_src, protocolo, puerto, confianza_ml, features_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (timestamp, tipo_final, ip_src, protocolo, puerto, confianza_ml, features_json))
+            INSERT INTO ataques (timestamp, tipo_ataque, ip_src, ip_dst, protocolo, puerto,
+                                 confianza_ml, features_json, vlan_id, ttl, packet_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (timestamp, tipo_final, ip_src, ip_dst, protocolo, puerto,
+              confianza_ml, features_json, vlan_id, ttl, packet_size))
         conn.commit()
     except Exception as e:
         pass
 
-    # Emitir señal Qt
-    evento = [timestamp, ip_src, ip_dst, puerto, protocolo, flag, tipo_final]
+    # Emitir señal Qt (tupla extendida: 10 elementos)
+    evento = [timestamp, ip_src, ip_dst, puerto, protocolo, flag, tipo_final,
+              vlan_id, ttl, packet_size]
     eventos_detectados.append(evento)
     comunicador.nuevo_evento.emit(evento)
 
@@ -661,6 +691,9 @@ def detectar_udp_flood(packet):
 # =============================================================================
 # FUNCIÓN: procesar_paquete
 # =============================================================================
+# Datos del ultimo paquete por IP (para pasar a guardar_ataque)
+_ultimo_datos_paquete = {}
+
 def procesar_paquete(packet):
     try:
         procesar_metricas(packet)
@@ -670,7 +703,12 @@ def procesar_paquete(packet):
             ip_dst = packet[scapy.IP].dst
             packet_len = len(packet)
             timestamp = packet.time
-            
+            ttl = packet[scapy.IP].ttl
+
+            vlan_id = 0
+            if packet.haslayer(scapy.Dot1Q):
+                vlan_id = packet[scapy.Dot1Q].vlan
+
             protocolo = 'OTRO'
             puerto_src = 0
             puerto_dst = 0
@@ -686,6 +724,14 @@ def procesar_paquete(packet):
                 puerto_src = packet[scapy.UDP].sport
                 puerto_dst = packet[scapy.UDP].dport
 
+            # Guardar datos del paquete para guardar_ataque()
+            _ultimo_datos_paquete[ip_src] = {
+                "ip_dst": ip_dst,
+                "vlan_id": vlan_id,
+                "ttl": ttl,
+                "packet_size": packet_len,
+            }
+
             # Alimentar el FlowTracker para ML
             flow_tracker.procesar_paquete(
                 ip_src, ip_dst, puerto_src, puerto_dst, 
@@ -700,7 +746,7 @@ def procesar_paquete(packet):
             detectar_sql_injection(packet)
             detectar_udp_flood(packet)
     except Exception as e:
-        print(f"[X] Excepción en procesar_paquete: {e}")
+        print(f"[X] Excepcion en procesar_paquete: {e}")
 
 
 # =============================================================================

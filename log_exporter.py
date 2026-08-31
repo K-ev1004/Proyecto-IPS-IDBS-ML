@@ -92,7 +92,7 @@ def exportar_logs_semanales():
         # Obtener todos los ataques (el filtro se hace en Python porque los
         # timestamps se guardan en formato time.ctime(), no ISO)
         cursor.execute('''
-            SELECT timestamp, tipo_ataque, ip_src, protocolo, puerto
+            SELECT timestamp, tipo_ataque, ip_src, ip_dst, protocolo, puerto, vlan_id, ttl, packet_size
             FROM ataques
             ORDER BY rowid
         ''')
@@ -100,28 +100,27 @@ def exportar_logs_semanales():
         todos = cursor.fetchall()
         conn.close()
         
-        # Filtrar solo los registros de la última semana (parsing de time.ctime)
         registros = [r for r in todos if _ts_en_rango(r[0], hace_7_dias, hoy)]
         
-        # Escribir al archivo .log
         with open(ruta_archivo, 'w', encoding='utf-8') as f:
-            # Encabezado
             f.write(f"================================================================================\n")
             f.write(f"LOGS CIBERSEGURIDAD - SEMANA: {hace_7_dias.strftime('%Y-%m-%d')} al {hoy.strftime('%Y-%m-%d')}\n")
             f.write(f"Sistema IDS/IPS - UNIPAZ\n")
             f.write(f"================================================================================\n\n")
             
-            # Líneas de cada registro
-            for timestamp, tipo_ataque, ip_src, protocolo, puerto in registros:
-                # Extraer nivel de registro del tipo de ataque
+            for timestamp, tipo_ataque, ip_src, ip_dst, protocolo, puerto, vlan_id, ttl, packet_size in registros:
                 if 'ML:' in tipo_ataque:
                     nivel = "[CRITICAL]"
-                elif '(Heurística)' in tipo_ataque:
+                elif '(Heuristica)' in tipo_ataque:
                     nivel = "[WARNING]"
                 else:
                     nivel = "[INFO]"
                 
-                f.write(f"{timestamp} | {nivel} | IP_SRC: {ip_src} | TIPO: {tipo_ataque} | PROTO: {protocolo} | PUERTO: {puerto}\n")
+                vlan_str = f" VLAN:{vlan_id}" if vlan_id else ""
+                ttl_str = f" TTL:{ttl}" if ttl else ""
+                size_str = f" SIZE:{packet_size}B" if packet_size else ""
+                
+                f.write(f"{timestamp} | {nivel} | IP_SRC: {ip_src} -> IP_DST: {ip_dst} | TIPO: {tipo_ataque} | PROTO: {protocolo} | PUERTO: {puerto}{vlan_str}{ttl_str}{size_str}\n")
         
         return ruta_archivo
         

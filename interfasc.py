@@ -50,10 +50,11 @@ except Exception as _e:
     logging.error("No se pudo importar 'ids' o 'mikrotik_api'. Detalle: %s", _e)
 
 try:
-    from geolocalizacion import obtener_ubicacion_ip, generar_mapa_pixmap
+    from geolocalizacion import obtener_ubicacion_ip, generar_mapa_pixmap, clasificar_ip_unipaz
 except Exception as _e:
     obtener_ubicacion_ip = None
     generar_mapa_pixmap = None
+    clasificar_ip_unipaz = None
     logging.error("No se pudo importar 'geolocalizacion'. Detalle: %s", _e)
 
 style.use('dark_background')
@@ -1211,6 +1212,21 @@ class IDSInterface(FluentWindow):
             flag   = self.table.item(row, 6).text() if self.table.item(row, 6) else ""
             tipo   = self.table.item(row, 7).text() if self.table.item(row, 7) else ""
 
+            vlan_id = ""
+            ttl = ""
+            packet_size = ""
+            try:
+                with data_lock:
+                    ev_list = list(eventos_detectados)
+                    if row < len(ev_list):
+                        ev = ev_list[row]
+                        if len(ev) >= 10:
+                            vlan_id = ev[7]
+                            ttl = ev[8]
+                            packet_size = ev[9]
+            except Exception:
+                pass
+
             evidencia = [f"<li>Protocolo/Flag: <b>{proto} / {flag}</b></li>"]
             if "syn flood"   in tipo.lower(): evidencia.append("<li>Indicador: volumen alto de SYN en ventana corta</li>")
             if "ddos"        in tipo.lower(): evidencia.append("<li>Indicador: volumen alto hacia destino (posible DDoS)</li>")
@@ -1219,6 +1235,32 @@ class IDSInterface(FluentWindow):
 
             color_sev = self._compute_severity(tipo)[1]
             txt_color = "#e1dfdd" if self.modo_oscuro else "#333333"
+
+            departamento = ""
+            if clasificar_ip_unipaz:
+                try:
+                    info_dep = clasificar_ip_unipaz(ip_src)
+                    if isinstance(info_dep, dict):
+                        departamento = info_dep.get("departamento", "")
+                    else:
+                        departamento = str(info_dep) if info_dep else ""
+                except Exception:
+                    departamento = ""
+
+            ttl_str = ""
+            if ttl and ttl != "":
+                try:
+                    ttl_int = int(ttl)
+                    ttl_str = f"{ttl} ({_estimar_os(ttl_int)})"
+                except Exception:
+                    ttl_str = str(ttl)
+
+            vlan_str = ""
+            if vlan_id and vlan_id != "" and vlan_id != 0:
+                try:
+                    vlan_str = _traducir_vlan(int(vlan_id))
+                except Exception:
+                    vlan_str = str(vlan_id)
 
             geo_html = ""
             if obtener_ubicacion_ip and generar_mapa_pixmap:
@@ -1271,6 +1313,32 @@ class IDSInterface(FluentWindow):
             else:
                 self.mapa_label.clear()
 
+            device_info_html = ""
+            if departamento:
+                device_info_html = f"""
+                <h4 style="color: #ffb400; margin-bottom: 5px;">Dispositivo UNIPAZ</h4>
+                <table style="width: 100%; margin-bottom: 10px;">
+                    <tr><td style="padding: 2px 0;"><b>Departamento:</b> {departamento}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>Subred:</b> {subred if 'subred' in dir() else 'Desconocida'}</td></tr>
+                </table>
+                """
+
+            packet_info_html = ""
+            packet_rows = []
+            if vlan_str:
+                packet_rows.append(f"<tr><td style='padding: 2px 0;'><b>VLAN:</b> {vlan_str}</td></tr>")
+            if ttl_str:
+                packet_rows.append(f"<tr><td style='padding: 2px 0;'><b>TTL:</b> {ttl_str}</td></tr>")
+            if packet_size and packet_size != "":
+                packet_rows.append(f"<tr><td style='padding: 2px 0;'><b>Tamanio Paquete:</b> {packet_size} bytes</td></tr>")
+            if packet_rows:
+                packet_info_html = f"""
+                <h4 style="color: #4daafc; margin-bottom: 5px;">Detalles Paquete</h4>
+                <table style="width: 100%; margin-bottom: 10px;">
+                    {"".join(packet_rows)}
+                </table>
+                """
+
             html_txt = f"""
             <div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; color: {txt_color};">
                 <h3 style="color: {color_sev}; margin-top: 0; margin-bottom: 10px;">Analisis Forense: {tipo}</h3>
@@ -1280,6 +1348,8 @@ class IDSInterface(FluentWindow):
                     <tr><td style="padding: 3px 0;"><b>Puerto:</b> {puerto}</td><td style="padding: 3px 0;"><b>Protocolo:</b> {proto}</td></tr>
                 </table>
                 {geo_html}
+                {device_info_html}
+                {packet_info_html}
                 <h4 style="color: #4daafc; margin-bottom: 5px;">Evidencia Detectada</h4>
                 <ul style="margin-top: 0; margin-bottom: 15px; padding-left: 20px;">
                     {"".join(evidencia)}
@@ -1318,10 +1388,10 @@ class IDSInterface(FluentWindow):
                 if contenido_cambio:
                     for i, ev in enumerate(eventos_a_mostrar):
                         try:
-                            hora, ip_src, ip_dst, puerto, protocolo, flag, tipo = ev
+                            hora, ip_src, ip_dst, puerto, protocolo, flag, tipo, vlan_id, ttl, packet_size = ev
                         except Exception:
-                            lst = list(ev) + [""] * 7
-                            hora, ip_src, ip_dst, puerto, protocolo, flag, tipo = lst[:7]
+                            lst = list(ev) + [""] * 10
+                            hora, ip_src, ip_dst, puerto, protocolo, flag, tipo, vlan_id, ttl, packet_size = lst[:10]
 
                         sev_txt, sev_color = self._compute_severity(str(tipo))
                         cols = [sev_txt, hora, ip_src, ip_dst, puerto, protocolo, flag, tipo]
@@ -1748,6 +1818,25 @@ class IDSInterface(FluentWindow):
         except:
             return False
 
+
+def _estimar_os(ttl):
+    """Estima el OS del dispositivo basado en el TTL del paquete."""
+    if ttl == 0:
+        return "Desconocido"
+    elif ttl <= 64:
+        return "Linux / Android / macOS"
+    elif ttl <= 128:
+        return "Windows"
+    elif ttl <= 255:
+        return "Router / Switch / Network Device"
+    return f"Otro (TTL={ttl})"
+
+def _traducir_vlan(vlan_id):
+    """Traduce VLAN ID a nombre legible."""
+    VLANES = {10: "Aulas", 20: "Biblioteca", 30: "Externos"}
+    if vlan_id == 0:
+        return "Sin VLAN"
+    return VLANES.get(vlan_id, f"VLAN {vlan_id}")
 
 def configurar_logging():
     logging.basicConfig(

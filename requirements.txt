@@ -11,6 +11,7 @@ tqdm
 PyQt5
 PyQt-Fluent-Widgets
 matplotlib
+staticmap
 
 # Red y Detección
 scapy

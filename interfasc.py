@@ -49,6 +49,13 @@ except Exception as _e:
     mikrotik_api = None
     logging.error("No se pudo importar 'ids' o 'mikrotik_api'. Detalle: %s", _e)
 
+try:
+    from geolocalizacion import obtener_ubicacion_ip, generar_mapa_pixmap
+except Exception as _e:
+    obtener_ubicacion_ip = None
+    generar_mapa_pixmap = None
+    logging.error("No se pudo importar 'geolocalizacion'. Detalle: %s", _e)
+
 style.use('dark_background')
 
 # CONSTANTES DE RENDIMIENTO
@@ -353,6 +360,12 @@ class IDSInterface(FluentWindow):
         self.detalle_text.setHtml("<p style='font-size:13px; color:#888;'>Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.</p>")
         right_layout.addWidget(SubtitleLabel("Inspección Forense del Evento"))
         right_layout.addWidget(self.detalle_text)
+
+        self.mapa_label = BodyLabel("")
+        self.mapa_label.setAlignment(Qt.AlignCenter)
+        self.mapa_label.setMinimumHeight(200)
+        self.mapa_label.setMaximumHeight(260)
+        right_layout.addWidget(self.mapa_label)
 
         self.trafico_en_vivo = PlainTextEdit()
         self.trafico_en_vivo.setReadOnly(True)
@@ -1185,6 +1198,7 @@ class IDSInterface(FluentWindow):
             items = self.table.selectedItems()
             if not items:
                 self.detalle_text.setHtml("<p style='font-size:13px; color:#888;'>Seleccione una alerta en la tabla para inspeccionar los metadatos y recomendaciones.</p>")
+                self.mapa_label.clear()
                 return
 
             row   = items[0].row()
@@ -1206,6 +1220,36 @@ class IDSInterface(FluentWindow):
             color_sev = self._compute_severity(tipo)[1]
             txt_color = "#e1dfdd" if self.modo_oscuro else "#333333"
 
+            geo_html = ""
+            geo_pais = ""
+            geo_ciudad = ""
+            if obtener_ubicacion_ip and generar_mapa_pixmap:
+                ubicacion = obtener_ubicacion_ip(ip_src)
+                geo_pais = ubicacion.get("country", "Desconocido")
+                geo_ciudad = ubicacion.get("city", "Desconocido")
+                geo_region = ubicacion.get("regionName", "Desconocido")
+                geo_isp = ubicacion.get("isp", "Desconocido")
+                geo_org = ubicacion.get("org", "Desconocido")
+                geo_as = ubicacion.get("as", "Desconocido")
+                geo_lat = ubicacion.get("lat", 0.0)
+                geo_lon = ubicacion.get("lon", 0.0)
+
+                geo_html = f"""
+                <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicación del Atacante</h4>
+                <table style="width: 100%; margin-bottom: 5px;">
+                    <tr><td style="padding: 2px 0;"><b>País:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>Región:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
+                    <tr><td colspan="2" style="padding: 2px 0;"><b>ASN:</b> {geo_as}</td></tr>
+                </table>
+                """
+
+                pixmap = generar_mapa_pixmap(geo_lat, geo_lon, ip_src, geo_ciudad, geo_pais, color_sev)
+                scaled = pixmap.scaled(480, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.mapa_label.setPixmap(scaled)
+            else:
+                self.mapa_label.clear()
+
             html_txt = f"""
             <div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; color: {txt_color};">
                 <h3 style="color: {color_sev}; margin-top: 0; margin-bottom: 10px;">Análisis Forense: {tipo}</h3>
@@ -1214,6 +1258,7 @@ class IDSInterface(FluentWindow):
                     <tr><td style="padding: 3px 0;"><b>IP Origen:</b> {ip_src}</td><td style="padding: 3px 0;"><b>IP Destino:</b> {ip_dst}</td></tr>
                     <tr><td style="padding: 3px 0;"><b>Puerto:</b> {puerto}</td><td style="padding: 3px 0;"><b>Protocolo:</b> {proto}</td></tr>
                 </table>
+                {geo_html}
                 <h4 style="color: #4daafc; margin-bottom: 5px;">Evidencia Detectada</h4>
                 <ul style="margin-top: 0; margin-bottom: 15px; padding-left: 20px;">
                     {"".join(evidencia)}

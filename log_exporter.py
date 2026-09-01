@@ -7,6 +7,7 @@
 import os
 import re
 import time
+import hashlib
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -122,7 +123,8 @@ def exportar_logs_semanales():
                 
                 f.write(f"{timestamp} | {nivel} | IP_SRC: {ip_src} -> IP_DST: {ip_dst} | TIPO: {tipo_ataque} | PROTO: {protocolo} | PUERTO: {puerto}{vlan_str}{ttl_str}{size_str}\n")
         
-        return ruta_archivo
+        ruta_sha = generar_hash_archivo(ruta_archivo)
+        return ruta_archivo, ruta_sha
         
     except Exception as e:
         print(f"[X] Error exportando logs semanales: {e}")
@@ -153,6 +155,35 @@ def registrar_bloqueo_log(ip, accion, duracion):
             
     except Exception as e:
         print(f"[X] Error registrando bloqueo en log: {e}")
+
+# =============================================================================
+# FUNCIÓN: generar_hash_archivo
+# =============================================================================
+def generar_hash_archivo(ruta_log):
+    """
+    Genera un archivo .sha256 con el hash SHA-512 del contenido del .log.
+    
+    Args:
+        ruta_log (str): Ruta completa del archivo .log a hashear
+        
+    Returns:
+        str: Ruta del archivo .sha256 generado, o None si hay error
+    """
+    try:
+        sha512 = hashlib.sha512()
+        with open(ruta_log, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha512.update(chunk)
+        hash_hex = sha512.hexdigest()
+        
+        ruta_sha = ruta_log + '.sha256'
+        with open(ruta_sha, 'w', encoding='utf-8') as f:
+            f.write(hash_hex)
+        
+        return ruta_sha
+    except Exception as e:
+        print(f"[X] Error generando hash SHA-512: {e}")
+        return None
 
 # =============================================================================
 # EJECUCIÓN PRINCIPAL (para pruebas directas)

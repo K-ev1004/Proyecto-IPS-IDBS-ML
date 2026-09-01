@@ -1769,8 +1769,11 @@ class IDSInterface(FluentWindow):
         try:
             from log_exporter import exportar_logs_semanales as _export
             try:
-                ruta = _export()
-                self.mostrar_mensaje("Backup Semanal", f"Logs exportados a: {ruta}", "info")
+                ruta_log, ruta_sha = _export()
+                msg = f"Logs exportados a: {ruta_log}"
+                if ruta_sha:
+                    msg += f"\nHash SHA-512: {ruta_sha}"
+                self.mostrar_mensaje("Backup Semanal", msg, "info")
             except Exception as e:
                 logging.error(f"Error en exportador de logs semanales: {e}")
         except Exception as e:

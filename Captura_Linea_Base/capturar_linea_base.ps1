@@ -5,13 +5,20 @@ $dumpcap = "C:\Program Files\Wireshark\dumpcap.exe"
 $tshark = "C:\Program Files\Wireshark\tshark.exe"
 $capinfos = "C:\Program Files\Wireshark\capinfos.exe"
 
-$interface = "7"  
+$interface = "7"
 $durationSec = 300
-$volumeCsv = Join-Path $dir "captura_volumen.csv"
-$volumeLog  = Join-Path $dir "volumen_log_errores.txt"
-$pcapng     = Join-Path $dir "captura_5min.pcapng"
+
+$timestamp = Get-Date -Format "HHmm"
+$volumeCsv = Join-Path $dir "captura_volumen_${timestamp}.csv"
+$pcapng     = Join-Path $dir "captura_5min_${timestamp}.pcapng"
+$volumeLog  = Join-Path $dir "volumen_log_errores_${timestamp}.txt"
+
+$culture = [System.Globalization.CultureInfo]::InvariantCulture
 
 Write-Output "Iniciando captura de $durationSec segundos en interfaz Ethernet (7)..."
+Write-Output "Timestamp: $timestamp"
+Write-Output "CSV: $volumeCsv"
+Write-Output "PCAP: $pcapng"
 
 $volumeJob = Start-Job -ScriptBlock {
     param($csv, $log, $secs)
@@ -46,7 +53,13 @@ $volumeJob = Start-Job -ScriptBlock {
             $tx = [math]::Max(0, ($curBytesTx - $prevBytesTx) / $dt)
             $prx = [math]::Max(0, ($curPktsRx - $prevPktsRx) / $dt)
             $ptx = [math]::Max(0, ($curPktsTx - $prevPktsTx) / $dt)
-            $lines.Add(("{0:yyyy-MM-dd HH:mm:ss.fff},{1:N2},{2:N2},{3:N2},{4:N2}" -f $curTime, $rx, $tx, $prx, $ptx))
+            $culture = [System.Globalization.CultureInfo]::InvariantCulture
+            $ts = $curTime.ToString("yyyy-MM-dd HH:mm:ss.fff")
+            $rxS = $rx.ToString("F2", $culture)
+            $txS = $tx.ToString("F2", $culture)
+            $prxS = $prx.ToString("F2", $culture)
+            $ptxS = $ptx.ToString("F2", $culture)
+            $lines.Add("$ts,$rxS,$txS,$prxS,$ptxS")
             $prevBytesRx = $curBytesRx; $prevBytesTx = $curBytesTx
             $prevPktsRx = $curPktsRx; $prevPktsTx = $curPktsTx
             $prevTime = $curTime
@@ -58,22 +71,28 @@ $volumeJob = Start-Job -ScriptBlock {
             "ERR $($_.Exception.Message)" | Out-File $log -Append
         }
     }
-}
+} -ArgumentList $volumeCsv, $volumeLog, $durationSec
 
 $pcapJob = Start-Job -ScriptBlock {
     param($dumpcap, $interface, $pcapng, $secs)
     & $dumpcap -i $interface -a duration:$secs -w $pcapng
-}
+} -ArgumentList $dumpcap, $interface, $pcapng, $durationSec
 
+Write-Output "Jobs iniciados. Esperando $durationSec segundos..."
 $volumeJob | Wait-Job -Timeout ($durationSec + 30) | Out-Null
 $pcapJob | Wait-Job -Timeout ($durationSec + 30) | Out-Null
 
 Receive-Job $volumeJob
 Receive-Job $pcapJob
 
-Remove-Item "Microsoft.PowerShell.Core\Function" -ErrorAction SilentlyContinue | Out-Null
+Remove-Job $volumeJob -Force -ErrorAction SilentlyContinue
+Remove-Job $pcapJob -Force -ErrorAction SilentlyContinue
 
-Write-Output "=== VOLUMEN ==="
-Write-Output "Archivo: $volumeCsv"
-Write-Output "=== PAQUETES ==="
-Write-Output "Archivo: $pcapng"
+Write-Output "=== CAPTURA COMPLETADA ==="
+Write-Output "Archivo volumen: $volumeCsv"
+Write-Output "Archivo paquetes: $pcapng"
+
+if (Test-Path $pcapng) {
+    $size = (Get-Item $pcapng).Length
+    Write-Output "Tamano PCAP: $([math]::Round($size/1MB, 2)) MB"
+}

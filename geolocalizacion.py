@@ -175,10 +175,10 @@ def obtener_ubicacion_ip(ip):
             "subred": info_unipaz["subred"],
             "hostname": hostname,
             "country": "Colombia",
-            "regionName": "Bogota D.C.",
-            "city": "Bogota",
-            "lat": 4.7110,
-            "lon": -74.0721,
+            "regionName": "Santander",
+            "city": "Bucaramanga",
+            "lat": 7.069694,
+            "lon": -73.745340,
             "isp": "UNIPAZ",
             "org": "Instituto Universitario de la Paz",
             "as": "Red Interna UNIPAZ",
@@ -254,11 +254,11 @@ def _geo_vacio():
 # =============================================================================
 def generar_mapa_pixmap(lat, lon, ip, ciudad="", pais="", color="#E81123",
                          hostname="", status="public"):
-    from staticmap import StaticMap, CircleMarker, Line
+    from staticmap import StaticMap, CircleMarker
     from PyQt5.QtGui import QPixmap, QImage
 
     try:
-        UNIPAZ_LAT, UNIPAZ_LON = 4.7110, -74.0721
+        UNIPAZ_LAT, UNIPAZ_LON = 7.069694, -73.745340
 
         m = StaticMap(480, 260,
                       url_template='https://tile.openstreetmap.org/{z}/{x}/{y}.png')
@@ -268,32 +268,21 @@ def generar_mapa_pixmap(lat, lon, ip, ciudad="", pais="", color="#E81123",
             depto = info["departamento"] if info else "UNIPAZ"
             color_depto = COLORES_DEPTO.get(depto, "#ffffff")
             r, g, b = _hex_a_rgb(color_depto)
-
-            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (77, 170, 252), 12))
-            m.add_marker(CircleMarker((UNIPAZ_LON + 0.003, UNIPAZ_LAT + 0.002),
-                                      (r, g, b), 14))
+            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (r, g, b), 14))
             image = m.render(zoom=15)
 
         elif status == "private":
-            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (77, 170, 252), 12))
-            m.add_marker(CircleMarker((UNIPAZ_LON + 0.003, UNIPAZ_LAT + 0.002),
-                                      (255, 180, 0), 14))
+            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (255, 180, 0), 14))
             image = m.render(zoom=14)
 
         elif lat == 0.0 and lon == 0.0:
-            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (77, 170, 252), 12))
+            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (128, 128, 128), 12))
             image = m.render(zoom=10)
 
         else:
             r, g, b = _hex_a_rgb(color)
             m.add_marker(CircleMarker((lon, lat), (r, g, b), 14))
-            m.add_marker(CircleMarker((UNIPAZ_LON, UNIPAZ_LAT), (77, 170, 252), 10))
-            m.add_line(Line([(lon, lat), (UNIPAZ_LON, UNIPAZ_LAT)],
-                            (255, 255, 255, 160), 2))
-
-            dist_lat = abs(lat - UNIPAZ_LAT)
-            dist_lon = abs(lon - UNIPAZ_LON)
-            max_dist = max(dist_lat, dist_lon)
+            max_dist = max(abs(lat - UNIPAZ_LAT), abs(lon - UNIPAZ_LON))
             if max_dist < 0.5:
                 zoom = 10
             elif max_dist < 2:

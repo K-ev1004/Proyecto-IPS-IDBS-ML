@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QHeaderView, QFileDialog, QSplitter,
     QMessageBox
 )
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QSettings
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QSettings, QObject
 from PyQt5.QtGui import QFont, QColor, QBrush
 
 # qfluentwidgets para diseño moderno
@@ -112,6 +112,37 @@ class DataProcessor(QThread):
         self.running = False
         self.quit()
         self.wait()
+
+class GeoWorker(QObject):
+    finished = pyqtSignal(dict)
+
+    def __init__(self, ip_src, color_sev):
+        super().__init__()
+        self.ip_src = ip_src
+        self.color_sev = color_sev
+
+    def run(self):
+        resultado = {}
+        try:
+            if obtener_ubicacion_ip:
+                resultado["ubicacion"] = obtener_ubicacion_ip(self.ip_src)
+        except Exception:
+            resultado["ubicacion"] = None
+        try:
+            if generar_mapa_pixmap and resultado.get("ubicacion"):
+                ub = resultado["ubicacion"]
+                lat = ub.get("lat", 0.0)
+                lon = ub.get("lon", 0.0)
+                hostname = ub.get("hostname", "")
+                es_privada = ub.get("status") == "private"
+                geo_pais = ub.get("country", "")
+                geo_ciudad = ub.get("city", "")
+                resultado["pixmap"] = generar_mapa_pixmap(
+                    lat, lon, self.ip_src, geo_ciudad, geo_pais,
+                    self.color_sev, hostname, es_privada)
+        except Exception:
+            resultado["pixmap"] = None
+        self.finished.emit(resultado)
 
 class IDSInterface(FluentWindow):
     def __init__(self):
@@ -367,6 +398,9 @@ class IDSInterface(FluentWindow):
         self.mapa_label.setMinimumHeight(200)
         self.mapa_label.setMaximumHeight(260)
         right_layout.addWidget(self.mapa_label)
+
+        self._geo_thread = None
+        self._geo_worker = None
 
         self.trafico_en_vivo = PlainTextEdit()
         self.trafico_en_vivo.setReadOnly(True)
@@ -1262,64 +1296,12 @@ class IDSInterface(FluentWindow):
                 except Exception:
                     vlan_str = str(vlan_id)
 
-            geo_html = ""
-            if obtener_ubicacion_ip and generar_mapa_pixmap:
-                ubicacion = obtener_ubicacion_ip(ip_src)
-
-                hostname = ubicacion.get("hostname", "Dispositivo Desconocido")
-                subred = ubicacion.get("subred", "Desconocida")
-                es_privada = ubicacion.get("status") == "private"
-                geo_pais = ubicacion.get("country", "Desconocido")
-                geo_ciudad = ubicacion.get("city", "Desconocido")
-                geo_region = ubicacion.get("regionName", "Desconocido")
-                geo_isp = ubicacion.get("isp", "Desconocido")
-                geo_org = ubicacion.get("org", "Desconocido")
-                geo_as = ubicacion.get("as", "Desconocido")
-                geo_lat = ubicacion.get("lat", 0.0)
-                geo_lon = ubicacion.get("lon", 0.0)
-
-                if es_privada:
-                    tipo_red = "Red Local (IP Privada)"
-                    geo_html = f"""
-                    <h4 style="color: #ffb400; margin-bottom: 5px;">Dispositivo del Atacante</h4>
-                    <table style="width: 100%; margin-bottom: 10px;">
-                        <tr><td style="padding: 2px 0;"><b>Hostname:</b> {hostname}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
-                        <tr><td style="padding: 2px 0;"><b>Subred:</b> {subred}</td><td style="padding: 2px 0;"><b>Tipo:</b> {tipo_red}</td></tr>
-                    </table>
-                    <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicacion Aproximada (Router/ISP)</h4>
-                    <table style="width: 100%; margin-bottom: 5px;">
-                        <tr><td style="padding: 2px 0;"><b>Pais:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
-                        <tr><td style="padding: 2px 0;"><b>Region:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
-                        <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
-                        <tr><td colspan="2" style="padding: 2px 0; font-style: italic; color: #888;">Nota: Ubicacion del router, no del dispositivo</td></tr>
-                    </table>
-                    """
-                else:
-                    geo_html = f"""
-                    <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicacion del Atacante</h4>
-                    <table style="width: 100%; margin-bottom: 5px;">
-                        <tr><td style="padding: 2px 0;"><b>Hostname:</b> {hostname}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
-                        <tr><td style="padding: 2px 0;"><b>Pais:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
-                        <tr><td style="padding: 2px 0;"><b>Region:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
-                        <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
-                        <tr><td colspan="2" style="padding: 2px 0;"><b>ASN:</b> {geo_as}</td></tr>
-                    </table>
-                    """
-
-                pixmap = generar_mapa_pixmap(geo_lat, geo_lon, ip_src, geo_ciudad, geo_pais,
-                                             color_sev, hostname, es_privada)
-                scaled = pixmap.scaled(480, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.mapa_label.setPixmap(scaled)
-            else:
-                self.mapa_label.clear()
-
             device_info_html = ""
             if departamento:
                 device_info_html = f"""
                 <h4 style="color: #ffb400; margin-bottom: 5px;">Dispositivo UNIPAZ</h4>
                 <table style="width: 100%; margin-bottom: 10px;">
                     <tr><td style="padding: 2px 0;"><b>Departamento:</b> {departamento}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
-                    <tr><td style="padding: 2px 0;"><b>Subred:</b> {subred if 'subred' in dir() else 'Desconocida'}</td></tr>
                 </table>
                 """
 
@@ -1339,6 +1321,8 @@ class IDSInterface(FluentWindow):
                 </table>
                 """
 
+            geo_placeholder = '<h4 style="color: #888; margin-bottom: 5px;">Ubicacion del Atacante</h4><p style="color:#888;">Cargando...</p>'
+
             html_txt = f"""
             <div style="font-family: 'Segoe UI', sans-serif; font-size: 13px; color: {txt_color};">
                 <h3 style="color: {color_sev}; margin-top: 0; margin-bottom: 10px;">Analisis Forense: {tipo}</h3>
@@ -1347,7 +1331,7 @@ class IDSInterface(FluentWindow):
                     <tr><td style="padding: 3px 0;"><b>IP Origen:</b> {ip_src}</td><td style="padding: 3px 0;"><b>IP Destino:</b> {ip_dst}</td></tr>
                     <tr><td style="padding: 3px 0;"><b>Puerto:</b> {puerto}</td><td style="padding: 3px 0;"><b>Protocolo:</b> {proto}</td></tr>
                 </table>
-                {geo_html}
+                {geo_placeholder}
                 {device_info_html}
                 {packet_info_html}
                 <h4 style="color: #4daafc; margin-bottom: 5px;">Evidencia Detectada</h4>
@@ -1363,8 +1347,82 @@ class IDSInterface(FluentWindow):
             </div>
             """
             self.detalle_text.setHtml(html_txt)
+
+            if self._geo_thread and self._geo_thread.isRunning():
+                self._geo_thread.quit()
+                self._geo_thread.wait(200)
+
+            self._geo_thread = QThread()
+            self._geo_worker = GeoWorker(ip_src, color_sev)
+            self._geo_worker.moveToThread(self._geo_thread)
+            self._geo_worker.finished.connect(
+                lambda resultado: self._on_geo_finished(
+                    resultado, ip_src, html_txt, txt_color))
+            self._geo_thread.started.connect(self._geo_worker.run)
+            self._geo_thread.start()
+
         except Exception as e:
             logging.error(f"Error actualizando detalle: {e}")
+
+    def _on_geo_finished(self, resultado, ip_src, html_base, txt_color):
+        try:
+            ubicacion = resultado.get("ubicacion")
+            pixmap = resultado.get("pixmap")
+
+            if pixmap:
+                scaled = pixmap.scaled(480, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.mapa_label.setPixmap(scaled)
+
+            if not ubicacion:
+                return
+
+            hostname = ubicacion.get("hostname", "Dispositivo Desconocido")
+            subred = ubicacion.get("subred", "Desconocida")
+            es_privada = ubicacion.get("status") == "private"
+            geo_pais = ubicacion.get("country", "Desconocido")
+            geo_ciudad = ubicacion.get("city", "Desconocido")
+            geo_region = ubicacion.get("regionName", "Desconocido")
+            geo_isp = ubicacion.get("isp", "Desconocido")
+            geo_org = ubicacion.get("org", "Desconocido")
+            geo_as = ubicacion.get("as", "Desconocido")
+            geo_lat = ubicacion.get("lat", 0.0)
+            geo_lon = ubicacion.get("lon", 0.0)
+
+            if es_privada:
+                tipo_red = "Red Local (IP Privada)"
+                geo_html = f"""
+                <h4 style="color: #ffb400; margin-bottom: 5px;">Dispositivo del Atacante</h4>
+                <table style="width: 100%; margin-bottom: 10px;">
+                    <tr><td style="padding: 2px 0;"><b>Hostname:</b> {hostname}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>Subred:</b> {subred}</td><td style="padding: 2px 0;"><b>Tipo:</b> {tipo_red}</td></tr>
+                </table>
+                <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicacion Aproximada (Router/ISP)</h4>
+                <table style="width: 100%; margin-bottom: 5px;">
+                    <tr><td style="padding: 2px 0;"><b>Pais:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>Region:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
+                    <tr><td colspan="2" style="padding: 2px 0; font-style: italic; color: #888;">Nota: Ubicacion del router, no del dispositivo</td></tr>
+                </table>
+                """
+            else:
+                geo_html = f"""
+                <h4 style="color: #d6a4ff; margin-bottom: 5px;">Ubicacion del Atacante</h4>
+                <table style="width: 100%; margin-bottom: 5px;">
+                    <tr><td style="padding: 2px 0;"><b>Hostname:</b> {hostname}</td><td style="padding: 2px 0;"><b>IP:</b> {ip_src}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>Pais:</b> {geo_pais}</td><td style="padding: 2px 0;"><b>Ciudad:</b> {geo_ciudad}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>Region:</b> {geo_region}</td><td style="padding: 2px 0;"><b>Coordenadas:</b> {geo_lat:.4f}, {geo_lon:.4f}</td></tr>
+                    <tr><td style="padding: 2px 0;"><b>ISP:</b> {geo_isp}</td><td style="padding: 2px 0;"><b>Org:</b> {geo_org}</td></tr>
+                    <tr><td colspan="2" style="padding: 2px 0;"><b>ASN:</b> {geo_as}</td></tr>
+                </table>
+                """
+
+            html_actualizado = html_base.replace(
+                '<h4 style="color: #888; margin-bottom: 5px;">Ubicacion del Atacante</h4><p style="color:#888;">Cargando...</p>',
+                geo_html)
+            self.detalle_text.setHtml(html_actualizado)
+
+        except Exception as e:
+            logging.error(f"Error en callback geo: {e}")
 
     def actualizar_tabla_optimizada(self):
         self.update_pending = False

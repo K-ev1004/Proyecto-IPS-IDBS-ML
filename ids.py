@@ -123,12 +123,34 @@ ultimo_ataque_por_ip = {}
 
 # Métricas para el Dashboard
 metricas_trafico = {
-    'total_pkts': 0,
-    'aulas_pkts': 0,
-    'biblioteca_pkts': 0,
+    'docentes_pkts': 0,
+    'admin_pkts': 0,
+    'estudiantes_pkts': 0,
     'externos_pkts': 0,
-    'riesgo_global': 0.0
+    'pps_actual': 0,
+    'flujos_activos': 0,
+    'flujos_totales': 0,
+    'detecciones_ataque': 0,
+    'detecciones_normal': 0,
 }
+
+
+def _clasificar_departamento_ip(ip):
+    """Clasifica IP en departamento según subredes UNIPAZ."""
+    try:
+        partes = ip.strip().split('.')
+        if len(partes) != 4:
+            return 'externos'
+        o1, o2 = int(partes[0]), int(partes[1])
+        if o1 == 172 and o2 == 20:
+            return 'docentes'
+        if o1 == 172 and o2 == 10:
+            return 'admin'
+        if o1 == 172 and o2 == 30:
+            return 'estudiantes'
+        return 'externos'
+    except Exception:
+        return 'externos'
 
 
 # =============================================================================
@@ -352,25 +374,25 @@ def on_flow_ready(ip_src, ip_dst, features_dict):
                 print(f"[X] Error SQLiGuard: {e}")
 
         # --- Decisión final ---
+        metricas_trafico['flujos_totales'] += 1
+
         if es_sqli_guard:
-            # SQLiGuard confirma SQLi: decisión de alta precisión (~99.8%)
             tipo_final = 'Inyeccion_SQL'
             confianza_ml = max(confianza_guard, confianza_v5)
-            metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza_ml * 10))
+            metricas_trafico['detecciones_ataque'] += 1
             guardar_ataque(ip_src, tipo_final, "TCP/UDP", features_dict.get('Dst Port', 0),
                            ip_dst, flag="SQLiGuard", es_ml_puro=True, confianza_ml=confianza_ml,
                            features_json=json.dumps(_features_sqli_guard(features_dict)))
         elif tipo_str != 'Normal':
             if confianza_v5 >= UMBRAL_ML:
-                metricas_trafico['riesgo_global'] = min(100.0, metricas_trafico['riesgo_global'] + (confianza_v5 * 10))
+                metricas_trafico['detecciones_ataque'] += 1
                 guardar_ataque(ip_src, tipo_str, "TCP/UDP", features_dict.get('Dst Port', 0),
                                ip_dst, flag="N/A", es_ml_puro=True, confianza_ml=confianza_v5,
                                features_json=json.dumps(_features_sqli_guard(features_dict)))
             else:
-                # v5 sospechó ataque pero bajo el umbral unificado: no loguear.
-                metricas_trafico['riesgo_global'] = max(0.0, metricas_trafico['riesgo_global'] - 0.5)
+                metricas_trafico['detecciones_normal'] += 1
         else:
-            metricas_trafico['riesgo_global'] = max(0.0, metricas_trafico['riesgo_global'] - 0.5)
+            metricas_trafico['detecciones_normal'] += 1
 
     except Exception as e:
         print(f"[X] Advertencia en ML Predict Flow: {e}")
@@ -500,41 +522,45 @@ def guardar_ataque(ip_src, tipo_ataque, protocolo, puerto, ip_dst="DESCONOCIDA",
 _ultimo_tiempo_emision = 0
 
 def procesar_metricas(packet):
-    metricas_trafico['total_pkts'] += 1
-    
-    # VLAN Stripping Analysis (802.1Q)
-    if packet.haslayer(scapy.Dot1Q):
-        vlan_id = packet[scapy.Dot1Q].vlan
-        # Suponiendo IDs ficticios: 10 Aulas, 20 Biblioteca, 30 Externos
-        if vlan_id == 10:
-            metricas_trafico['aulas_pkts'] += 1
-        elif vlan_id == 20:
-            metricas_trafico['biblioteca_pkts'] += 1
-        else:
-            metricas_trafico['externos_pkts'] += 1
+    # Clasificar por subred IP (departamento UNIPAZ)
+    if packet.haslayer(scapy.IP):
+        ip_src = packet[scapy.IP].src
+        depto = _clasificar_departamento_ip(ip_src)
     else:
-        # Sin VLAN asume red externa / por defecto
+        depto = 'externos'
+
+    if depto == 'docentes':
+        metricas_trafico['docentes_pkts'] += 1
+    elif depto == 'admin':
+        metricas_trafico['admin_pkts'] += 1
+    elif depto == 'estudiantes':
+        metricas_trafico['estudiantes_pkts'] += 1
+    else:
         metricas_trafico['externos_pkts'] += 1
-            
+
     # Emitir métricas al dashboard cada 1 segundo
     global _ultimo_tiempo_emision, _pkts_ultimo_segundo, ewma_pps
     _pkts_ultimo_segundo += 1
     current_time = time.time()
-    
+
     if current_time - _ultimo_tiempo_emision > 1.0:
         # Actualización EWMA
         if ewma_pps == 0.0:
             ewma_pps = _pkts_ultimo_segundo
         else:
             ewma_pps = alpha_ewma * _pkts_ultimo_segundo + (1 - alpha_ewma) * ewma_pps
-            
+
+        metricas_trafico['pps_actual'] = _pkts_ultimo_segundo
+        metricas_trafico['flujos_activos'] = len(flow_tracker.flujos) if hasattr(flow_tracker, 'flujos') else 0
+
         comunicador.actualizacion_dashboard.emit(metricas_trafico.copy())
-        
-        # Reset para contar paquetes por segundo y no acumulativo
-        metricas_trafico['aulas_pkts'] = 0
-        metricas_trafico['biblioteca_pkts'] = 0
+
+        # Reset contadores por segundo
+        metricas_trafico['docentes_pkts'] = 0
+        metricas_trafico['admin_pkts'] = 0
+        metricas_trafico['estudiantes_pkts'] = 0
         metricas_trafico['externos_pkts'] = 0
-        
+
         resumen = packet.summary()
         comunicador.nuevo_trafico.emit(resumen)
         _ultimo_tiempo_emision = current_time

@@ -7,6 +7,7 @@ import sys
 import os
 import time
 import csv
+import sqlite3
 import logging
 import re
 from collections import Counter, deque
@@ -24,7 +25,7 @@ from PyQt5.QtGui import QFont, QColor, QBrush
 # qfluentwidgets para diseño moderno
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, InfoBar, InfoBarPosition,
-    PrimaryPushButton, TransparentPushButton, TableWidget,
+    PrimaryPushButton, TransparentPushButton, PushButton, TableWidget,
     ComboBox, LineEdit, SpinBox, DoubleSpinBox, CheckBox, PlainTextEdit, TextEdit,
     SubtitleLabel, BodyLabel, TitleLabel, Theme, setTheme, FluentIcon as FIF,
     SimpleCardWidget
@@ -36,6 +37,8 @@ from matplotlib.figure import Figure
 from matplotlib import style
 from matplotlib import cm
 from matplotlib import colors as mcolors
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 
 # Módulo interno
 
@@ -110,7 +113,6 @@ class DataProcessor(QThread):
 
     def stop(self):
         self.running = False
-        self.quit()
         self.wait()
 
 class GeoWorker(QObject):
@@ -143,6 +145,58 @@ class GeoWorker(QObject):
         except Exception:
             resultado["pixmap"] = None
         self.finished.emit(resultado)
+
+
+class MapaWorker(QObject):
+    finished = pyqtSignal(object)
+
+    def run(self):
+        from staticmap import StaticMap, CircleMarker
+        from PyQt5.QtGui import QPixmap, QImage
+
+        try:
+            ruta_db = os.path.join(BASE_DIR, 'intrusiones.db')
+            conn = sqlite3.connect(ruta_db)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT ip_src, tipo_ataque
+                FROM ataques ORDER BY rowid DESC LIMIT 10
+            ''')
+            ultimos = cursor.fetchall()
+            conn.close()
+
+            if not ultimos:
+                self.finished.emit(None)
+                return
+
+            m = StaticMap(600, 300,
+                          url_template='https://tile.openstreetmap.org/{z}/{x}/{y}.png')
+
+            for ip, tipo in ultimos:
+                if not ip:
+                    continue
+                try:
+                    ub = obtener_ubicacion_ip(ip) if obtener_ubicacion_ip else None
+                except Exception:
+                    ub = None
+                if not ub:
+                    continue
+                lat = ub.get("lat", 0.0)
+                lon = ub.get("lon", 0.0)
+                if lat == 0.0 and lon == 0.0:
+                    continue
+                m.add_marker(CircleMarker((lon, lat), (255, 50, 50), 8))
+
+            image = m.render(zoom=5)
+            buf = image.tobytes("raw", "RGB")
+            qimg = QImage(buf, image.width, image.height, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            scaled = pixmap.scaled(600, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.finished.emit(scaled)
+        except Exception as e:
+            logging.error(f"Error en MapaWorker: {e}")
+            self.finished.emit(None)
+
 
 class IDSInterface(FluentWindow):
     def __init__(self):
@@ -401,6 +455,7 @@ class IDSInterface(FluentWindow):
 
         self._geo_thread = None
         self._geo_worker = None
+        self._geo_generation = 0
 
         self.trafico_en_vivo = PlainTextEdit()
         self.trafico_en_vivo.setReadOnly(True)
@@ -494,15 +549,19 @@ class IDSInterface(FluentWindow):
         layout.addLayout(controls_layout)
 
         self._bloqueos_data = []
-        self.historial_aulas = deque(maxlen=60)
-        self.historial_biblio = deque(maxlen=60)
+        self.historial_docentes = deque(maxlen=60)
+        self.historial_admin = deque(maxlen=60)
+        self.historial_estudiantes = deque(maxlen=60)
         self.historial_externos = deque(maxlen=60)
+        self._geo_thread = None
+        self._geo_worker = None
+        self._geo_generation = 0
 
     def setup_stats_page(self):
         layout = QVBoxLayout(self.page_stats)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)
-        
+
         header_layout = QHBoxLayout()
         header = TitleLabel("Análisis Avanzado de Amenazas")
         header_layout.addStretch()
@@ -517,15 +576,17 @@ class IDSInterface(FluentWindow):
         # -- KPIs --
         kpi_layout = QHBoxLayout()
         kpi_layout.setSpacing(15)
-        
-        self.kpi_riesgo = TitleLabel("0.0%")
-        self.kpi_eventos = TitleLabel("0")
+
+        self.kpi_pps = TitleLabel("0")
+        self.kpi_flujos = TitleLabel("0/0")
+        self.kpi_deteccion = TitleLabel("0%")
         self.kpi_ips = TitleLabel("0")
         self.kpi_bloqueos = TitleLabel("0")
-        
-        for title, value_lbl in [("Riesgo Global (CatBoost)", self.kpi_riesgo), 
-                                 ("Eventos Detectados", self.kpi_eventos),
-                                 ("IPs Atacantes", self.kpi_ips), 
+
+        for title, value_lbl in [("PPS Actual", self.kpi_pps),
+                                 ("Flujos (Activos/Totales)", self.kpi_flujos),
+                                 ("Tasa Detección", self.kpi_deteccion),
+                                 ("IPs Atacantes", self.kpi_ips),
                                  ("Bloqueos Activos", self.kpi_bloqueos)]:
             card = SimpleCardWidget()
             cl = QVBoxLayout(card)
@@ -537,13 +598,13 @@ class IDSInterface(FluentWindow):
             cl.addWidget(t)
             cl.addWidget(value_lbl)
             kpi_layout.addWidget(card)
-            
+
         layout.addLayout(kpi_layout)
 
         # -- Middle Panel: Pie & Top IPs --
         mid_layout = QHBoxLayout()
         mid_layout.setSpacing(15)
-        
+
         pie_card = SimpleCardWidget()
         pie_layout = QVBoxLayout(pie_card)
         self.canvas_pie = FigureCanvas(Figure(figsize=(5, 4)))
@@ -553,7 +614,7 @@ class IDSInterface(FluentWindow):
         self.ax_pie = self.fig_pie.add_subplot(111)
         pie_layout.addWidget(self.canvas_pie)
         mid_layout.addWidget(pie_card)
-        
+
         explicacion_tooltip = (
             "<b>Glosario de Amenazas (Machine Learning):</b><br><br>"
             "<b>• Tráfico Normal (0):</b> Conexiones regulares sin intención maliciosa.<br>"
@@ -571,7 +632,7 @@ class IDSInterface(FluentWindow):
         lbl_top = SubtitleLabel("Top 5 IPs Atacantes")
         lbl_top.setAlignment(Qt.AlignCenter)
         top_ips_layout.addWidget(lbl_top)
-        
+
         self.table_top_ips = TableWidget()
         self.table_top_ips.setColumnCount(2)
         self.table_top_ips.setHorizontalHeaderLabels(["IP Origen", "Nº de Alertas"])
@@ -582,10 +643,10 @@ class IDSInterface(FluentWindow):
         self.table_top_ips.setBorderRadius(4)
         top_ips_layout.addWidget(self.table_top_ips)
         mid_layout.addWidget(top_ips_card)
-        
+
         layout.addLayout(mid_layout)
 
-        # -- Bottom Panel: Line --
+        # -- Line Chart: Tráfico por Departamento (4 series) --
         line_card = SimpleCardWidget()
         line_layout = QVBoxLayout(line_card)
         self.canvas_line = FigureCanvas(Figure(figsize=(10, 3)))
@@ -595,6 +656,25 @@ class IDSInterface(FluentWindow):
         self.ax_line = self.fig_line.add_subplot(111)
         line_layout.addWidget(self.canvas_line)
         layout.addWidget(line_card)
+
+        # -- Mapa de Últimos 10 Ataques --
+        mapa_card = SimpleCardWidget()
+        mapa_header = QHBoxLayout()
+        mapa_title = SubtitleLabel("Mapa de Últimos 10 Ataques")
+        mapa_header.addWidget(mapa_title)
+        mapa_header.addStretch()
+        self.btnActualizarMapa = PushButton("Actualizar")
+        self.btnActualizarMapa.clicked.connect(self._on_map_refresh_clicked)
+        mapa_header.addWidget(self.btnActualizarMapa)
+
+        self.mapa_ataques_label = BodyLabel("")
+        self.mapa_ataques_label.setAlignment(Qt.AlignCenter)
+        self.mapa_ataques_label.setMinimumHeight(260)
+
+        mapa_main = QVBoxLayout(mapa_card)
+        mapa_main.addLayout(mapa_header)
+        mapa_main.addWidget(self.mapa_ataques_label)
+        layout.addWidget(mapa_card)
 
 
 
@@ -1350,22 +1430,27 @@ class IDSInterface(FluentWindow):
 
             if self._geo_thread and self._geo_thread.isRunning():
                 self._geo_thread.quit()
-                self._geo_thread.wait(200)
+                self._geo_thread.wait(500)
+
+            self._geo_generation += 1
+            gen = self._geo_generation
 
             self._geo_thread = QThread()
             self._geo_worker = GeoWorker(ip_src, color_sev)
             self._geo_worker.moveToThread(self._geo_thread)
             self._geo_worker.finished.connect(
-                lambda resultado: self._on_geo_finished(
-                    resultado, ip_src, html_txt, txt_color))
+                lambda resultado, g=gen: self._on_geo_finished(
+                    resultado, ip_src, html_txt, txt_color, g))
             self._geo_thread.started.connect(self._geo_worker.run)
             self._geo_thread.start()
 
         except Exception as e:
             logging.error(f"Error actualizando detalle: {e}")
 
-    def _on_geo_finished(self, resultado, ip_src, html_base, txt_color):
+    def _on_geo_finished(self, resultado, ip_src, html_base, txt_color, generation):
         try:
+            if generation != self._geo_generation:
+                return
             ubicacion = resultado.get("ubicacion")
             pixmap = resultado.get("pixmap")
 
@@ -1586,7 +1671,9 @@ class IDSInterface(FluentWindow):
             
         if hasattr(self, 'table_top_ips'):
             self.table_top_ips.setRowCount(0)
-            self.kpi_eventos.setText("0")
+            self.kpi_pps.setText("0")
+            self.kpi_flujos.setText("0/0")
+            self.kpi_deteccion.setText("0%")
             self.kpi_ips.setText("0")
             self.kpi_bloqueos.setText("0")
         
@@ -1594,11 +1681,22 @@ class IDSInterface(FluentWindow):
 
     def actualizar_dashboard_en_vivo(self, metricas):
         try:
-            if hasattr(self, 'kpi_riesgo'):
-                self.kpi_riesgo.setText(f"{metricas.get('riesgo_global', 0.0):.1f}%")
-            if hasattr(self, 'historial_aulas'):
-                self.historial_aulas.append(metricas.get('aulas_pkts', 0))
-                self.historial_biblio.append(metricas.get('biblioteca_pkts', 0))
+            self.kpi_pps.setText(str(metricas.get('pps_actual', 0)))
+
+            activos = metricas.get('flujos_activos', 0)
+            totales = metricas.get('flujos_totales', 0)
+            self.kpi_flujos.setText(f"{activos}/{totales}")
+
+            ataques = metricas.get('detecciones_ataque', 0)
+            normal = metricas.get('detecciones_normal', 0)
+            total_det = ataques + normal
+            tasa = (ataques / total_det * 100) if total_det > 0 else 0.0
+            self.kpi_deteccion.setText(f"{tasa:.1f}%")
+
+            if hasattr(self, 'historial_docentes'):
+                self.historial_docentes.append(metricas.get('docentes_pkts', 0))
+                self.historial_admin.append(metricas.get('admin_pkts', 0))
+                self.historial_estudiantes.append(metricas.get('estudiantes_pkts', 0))
                 self.historial_externos.append(metricas.get('externos_pkts', 0))
         except Exception as e:
             logging.error(f"Error en actualizar_dashboard_en_vivo: {e}")
@@ -1618,7 +1716,6 @@ class IDSInterface(FluentWindow):
             accent_color = "#4daafc" if self.modo_oscuro else "#0078d4"
 
             # 1. Update KPIs
-            self.kpi_eventos.setText(str(len(eventos_detectados)))
             self.kpi_ips.setText(str(len(advertencias_cont)))
             activos = sum(1 for b in self._bloqueos_data if b['estado'] == 'Activo') if hasattr(self, '_bloqueos_data') else 0
             self.kpi_bloqueos.setText(str(activos))
@@ -1696,44 +1793,73 @@ class IDSInterface(FluentWindow):
                 self.table_top_ips.setItem(i, 0, item_ip)
                 self.table_top_ips.setItem(i, 1, item_count)
 
-            # 4. Gráfico Multi-línea: Segmentación de Red (VLAN)
+            # 4. Gráfico Multi-línea: Tráfico por Departamento
             self.fig_line.patch.set_facecolor('none')
             self.ax_line.clear()
             self.ax_line.set_facecolor('none')
-            
-            h_aulas = list(self.historial_aulas)
-            h_biblio = list(self.historial_biblio)
+
+            h_doc = list(self.historial_docentes)
+            h_admin = list(self.historial_admin)
+            h_est = list(self.historial_estudiantes)
             h_ext = list(self.historial_externos)
-            max_len = max(len(h_aulas), len(h_biblio), len(h_ext), 1)
+            max_len = max(len(h_doc), len(h_admin), len(h_est), len(h_ext), 1)
             x_data = list(range(max_len))
-            
-            h_aulas = [0] * (max_len - len(h_aulas)) + h_aulas
-            h_biblio = [0] * (max_len - len(h_biblio)) + h_biblio
+
+            h_doc = [0] * (max_len - len(h_doc)) + h_doc
+            h_admin = [0] * (max_len - len(h_admin)) + h_admin
+            h_est = [0] * (max_len - len(h_est)) + h_est
             h_ext = [0] * (max_len - len(h_ext)) + h_ext
-            
-            self.ax_line.plot(x_data, h_aulas, color="#4daafc", linewidth=2.0, label="Aulas")
-            self.ax_line.fill_between(x_data, h_aulas, color="#4daafc", alpha=0.1)
-            self.ax_line.plot(x_data, h_biblio, color="#6ccb5f", linewidth=2.0, label="Biblioteca")
-            self.ax_line.fill_between(x_data, h_biblio, color="#6ccb5f", alpha=0.1)
+
+            self.ax_line.plot(x_data, h_doc, color="#4daafc", linewidth=2.0, label="Docentes")
+            self.ax_line.fill_between(x_data, h_doc, color="#4daafc", alpha=0.1)
+            self.ax_line.plot(x_data, h_admin, color="#6ccb5f", linewidth=2.0, label="Administrativo")
+            self.ax_line.fill_between(x_data, h_admin, color="#6ccb5f", alpha=0.1)
+            self.ax_line.plot(x_data, h_est, color="#ff9f43", linewidth=2.0, label="Estudiantes")
+            self.ax_line.fill_between(x_data, h_est, color="#ff9f43", alpha=0.1)
             self.ax_line.plot(x_data, h_ext, color="#ff3b30", linewidth=2.0, label="Externos")
             self.ax_line.fill_between(x_data, h_ext, color="#ff3b30", alpha=0.1)
-            
-            self.ax_line.set_title("Tráfico por Segmentos de Red (Últimos 60s)", color=text_color, fontsize=11, pad=15, weight='bold')
+
+            self.ax_line.set_title("Tráfico por Departamento (Últimos 60s)", color=text_color, fontsize=11, pad=15, weight='bold')
             self.ax_line.tick_params(axis='both', colors=text_color, labelsize=9)
             self.ax_line.legend(loc="upper left", facecolor=grid_color, edgecolor="none", labelcolor=text_color)
-            
+
             for spine in self.ax_line.spines.values():
                 spine.set_edgecolor(grid_color)
             self.ax_line.grid(True, linestyle='--', alpha=0.4, color=grid_color)
             self.ax_line.set_xlim(0, max(1, len(x_data) - 1))
             self.ax_line.set_ylim(bottom=0)
-            self.fig_line.tight_layout(pad=1.0)
             self.canvas_line.draw_idle()
 
         except Exception as e:
             logging.error(f"Error actualizando gráficos avanzados: {e}")
         finally:
             self.graph_update_pending = False
+
+    def _on_map_refresh_clicked(self):
+        self.btnActualizarMapa.setEnabled(False)
+        self.btnActualizarMapa.setText("Cargando...")
+
+        self._mapa_thread = QThread()
+        self._mapa_worker = MapaWorker()
+        self._mapa_worker.moveToThread(self._mapa_thread)
+        self._mapa_thread.started.connect(self._mapa_worker.run)
+        self._mapa_worker.finished.connect(self._on_mapa_finished)
+        self._mapa_worker.finished.connect(self._mapa_thread.quit)
+        self._mapa_thread.start()
+
+    def _on_mapa_finished(self, pixmap):
+        try:
+            self.btnActualizarMapa.setEnabled(True)
+            self.btnActualizarMapa.setText("Actualizar")
+            if pixmap:
+                self.mapa_ataques_label.setPixmap(pixmap)
+            else:
+                self.mapa_ataques_label.setText("No hay ataques con ubicación conocida")
+        except Exception as e:
+            logging.error(f"Error en _on_mapa_finished: {e}")
+
+    def actualizar_mapa_ataques(self):
+        self._on_map_refresh_clicked()
 
     def _apply_table_proportions(self):
         if not hasattr(self, "table"):

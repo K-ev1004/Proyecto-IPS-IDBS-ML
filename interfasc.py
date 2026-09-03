@@ -53,11 +53,12 @@ except Exception as _e:
     logging.error("No se pudo importar 'ids' o 'mikrotik_api'. Detalle: %s", _e)
 
 try:
-    from geolocalizacion import obtener_ubicacion_ip, generar_mapa_pixmap, clasificar_ip_unipaz
+    from geolocalizacion import obtener_ubicacion_ip, generar_mapa_datos, clasificar_ip_unipaz, _render_pixmap_from_datos
 except Exception as _e:
     obtener_ubicacion_ip = None
-    generar_mapa_pixmap = None
+    generar_mapa_datos = None
     clasificar_ip_unipaz = None
+    _render_pixmap_from_datos = None
     logging.error("No se pudo importar 'geolocalizacion'. Detalle: %s", _e)
 
 style.use('dark_background')
@@ -130,20 +131,23 @@ class GeoWorker(QObject):
                 resultado["ubicacion"] = obtener_ubicacion_ip(self.ip_src)
         except Exception:
             resultado["ubicacion"] = None
-        try:
-            if generar_mapa_pixmap and resultado.get("ubicacion"):
-                ub = resultado["ubicacion"]
-                lat = ub.get("lat", 0.0)
-                lon = ub.get("lon", 0.0)
-                hostname = ub.get("hostname", "")
-                es_privada = ub.get("status") == "private"
-                geo_pais = ub.get("country", "")
-                geo_ciudad = ub.get("city", "")
-                resultado["pixmap"] = generar_mapa_pixmap(
-                    lat, lon, self.ip_src, geo_ciudad, geo_pais,
-                    self.color_sev, hostname, es_privada)
-        except Exception:
+
+        # Verificar interrupción antes de la operación lenta (mapa)
+        if QThread.currentThread().isInterruptionRequested():
             resultado["pixmap"] = None
+            self.finished.emit(resultado)
+            return
+
+        try:
+            if generar_mapa_datos and resultado.get("ubicacion"):
+                ub = resultado["ubicacion"]
+                resultado["mapa_datos"] = generar_mapa_datos(
+                    ub.get("lat", 0.0), ub.get("lon", 0.0),
+                    self.ip_src, ub.get("city", ""), ub.get("country", ""),
+                    self.color_sev, ub.get("hostname", ""),
+                    ub.get("status") == "private")
+        except Exception:
+            resultado["mapa_datos"] = None
         self.finished.emit(resultado)
 
 
@@ -152,7 +156,6 @@ class MapaWorker(QObject):
 
     def run(self):
         from staticmap import StaticMap, CircleMarker
-        from PyQt5.QtGui import QPixmap, QImage
 
         try:
             ruta_db = os.path.join(BASE_DIR, 'intrusiones.db')
@@ -189,16 +192,16 @@ class MapaWorker(QObject):
 
             image = m.render(zoom=5)
             buf = image.tobytes("raw", "RGB")
-            qimg = QImage(buf, image.width, image.height, QImage.Format_RGB888)
-            pixmap = QPixmap.fromImage(qimg)
-            scaled = pixmap.scaled(600, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.finished.emit(scaled)
+            self.finished.emit({"buf": buf, "width": image.width, "height": image.height})
         except Exception as e:
             logging.error(f"Error en MapaWorker: {e}")
             self.finished.emit(None)
 
 
 class IDSInterface(FluentWindow):
+    _IFACE_DISPLAY = {"Ethernet": "LAN", "Wi-Fi": "VLAN"}
+    _IFACE_REVERSE = {"LAN": "Ethernet", "VLAN": "Wi-Fi"}
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("IDS UNIPAZ - Sistema de Detección de Intrusiones")
@@ -456,6 +459,7 @@ class IDSInterface(FluentWindow):
         self._geo_thread = None
         self._geo_worker = None
         self._geo_generation = 0
+        self._geo_orphans = []
 
         self.trafico_en_vivo = PlainTextEdit()
         self.trafico_en_vivo.setReadOnly(True)
@@ -556,6 +560,7 @@ class IDSInterface(FluentWindow):
         self._geo_thread = None
         self._geo_worker = None
         self._geo_generation = 0
+        self._geo_orphans = []
 
     def setup_stats_page(self):
         layout = QVBoxLayout(self.page_stats)
@@ -646,16 +651,20 @@ class IDSInterface(FluentWindow):
 
         layout.addLayout(mid_layout)
 
+        # -- Fila inferior: Gráfico + Mapa lado a lado --
+        bottom_layout = QHBoxLayout()
+        bottom_layout.setSpacing(15)
+
         # -- Line Chart: Tráfico por Departamento (4 series) --
         line_card = SimpleCardWidget()
         line_layout = QVBoxLayout(line_card)
-        self.canvas_line = FigureCanvas(Figure(figsize=(10, 3)))
+        self.canvas_line = FigureCanvas(Figure(figsize=(7, 3)))
         self.canvas_line.setStyleSheet("background-color: transparent;")
         self.fig_line = self.canvas_line.figure
         self.fig_line.patch.set_alpha(0.0)
         self.ax_line = self.fig_line.add_subplot(111)
         line_layout.addWidget(self.canvas_line)
-        layout.addWidget(line_card)
+        bottom_layout.addWidget(line_card, stretch=2)
 
         # -- Mapa de Últimos 10 Ataques --
         mapa_card = SimpleCardWidget()
@@ -674,7 +683,9 @@ class IDSInterface(FluentWindow):
         mapa_main = QVBoxLayout(mapa_card)
         mapa_main.addLayout(mapa_header)
         mapa_main.addWidget(self.mapa_ataques_label)
-        layout.addWidget(mapa_card)
+        bottom_layout.addWidget(mapa_card, stretch=1)
+
+        layout.addLayout(bottom_layout)
 
 
 
@@ -1267,7 +1278,11 @@ class IDSInterface(FluentWindow):
         if "Ethernet" in ifaces:
             ifaces = ["Ethernet"] + [x for x in ifaces if x != "Ethernet"]
 
-        return ifaces
+        return [self._IFACE_DISPLAY.get(i, i) for i in ifaces]
+
+    def _get_real_iface(self):
+        display = self.combo_iface.currentText()
+        return self._IFACE_REVERSE.get(display, display)
 
     def _set_running_state(self, running: bool):
         iface  = self.combo_iface.currentText() if hasattr(self, "combo_iface") else "N/A"
@@ -1429,8 +1444,10 @@ class IDSInterface(FluentWindow):
             self.detalle_text.setHtml(html_txt)
 
             if self._geo_thread and self._geo_thread.isRunning():
-                self._geo_thread.quit()
-                self._geo_thread.wait(500)
+                self._geo_thread.requestInterruption()
+                self._geo_orphans.append(self._geo_thread)
+                self._geo_thread = None
+                self._geo_worker = None
 
             self._geo_generation += 1
             gen = self._geo_generation
@@ -1441,6 +1458,7 @@ class IDSInterface(FluentWindow):
             self._geo_worker.finished.connect(
                 lambda resultado, g=gen: self._on_geo_finished(
                     resultado, ip_src, html_txt, txt_color, g))
+            self._geo_worker.finished.connect(self._cleanup_orphans)
             self._geo_thread.started.connect(self._geo_worker.run)
             self._geo_thread.start()
 
@@ -1452,11 +1470,13 @@ class IDSInterface(FluentWindow):
             if generation != self._geo_generation:
                 return
             ubicacion = resultado.get("ubicacion")
-            pixmap = resultado.get("pixmap")
+            mapa_datos = resultado.get("mapa_datos")
 
-            if pixmap:
-                scaled = pixmap.scaled(480, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.mapa_label.setPixmap(scaled)
+            if mapa_datos:
+                pixmap = _render_pixmap_from_datos(mapa_datos)
+                if pixmap:
+                    scaled = pixmap.scaled(480, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.mapa_label.setPixmap(scaled)
 
             if not ubicacion:
                 return
@@ -1508,6 +1528,10 @@ class IDSInterface(FluentWindow):
 
         except Exception as e:
             logging.error(f"Error en callback geo: {e}")
+
+    def _cleanup_orphans(self):
+        """Elimina de la lista los threads que ya terminaron."""
+        self._geo_orphans = [t for t in self._geo_orphans if t.isRunning()]
 
     def actualizar_tabla_optimizada(self):
         self.update_pending = False
@@ -1609,7 +1633,7 @@ class IDSInterface(FluentWindow):
         self._alert_ts.clear()
         self._start_time = time.time()
 
-        iface = self.combo_iface.currentText() if hasattr(self, "combo_iface") else None
+        iface = self._get_real_iface() if hasattr(self, "combo_iface") else None
 
         if ids and hasattr(ids, 'iniciar_monitoreo'):
             try:
@@ -1847,12 +1871,17 @@ class IDSInterface(FluentWindow):
         self._mapa_worker.finished.connect(self._mapa_thread.quit)
         self._mapa_thread.start()
 
-    def _on_mapa_finished(self, pixmap):
+    def _on_mapa_finished(self, data):
         try:
             self.btnActualizarMapa.setEnabled(True)
             self.btnActualizarMapa.setText("Actualizar")
-            if pixmap:
-                self.mapa_ataques_label.setPixmap(pixmap)
+            if data and _render_pixmap_from_datos:
+                pixmap = _render_pixmap_from_datos(data)
+                if pixmap:
+                    scaled = pixmap.scaled(600, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.mapa_ataques_label.setPixmap(scaled)
+                else:
+                    self.mapa_ataques_label.setText("No hay ataques con ubicación conocida")
             else:
                 self.mapa_ataques_label.setText("No hay ataques con ubicación conocida")
         except Exception as e:

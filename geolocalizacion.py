@@ -254,8 +254,20 @@ def _geo_vacio():
 # =============================================================================
 def generar_mapa_pixmap(lat, lon, ip, ciudad="", pais="", color="#E81123",
                          hostname="", status="public"):
+    pixmap_data = generar_mapa_datos(lat, lon, ip, ciudad, pais, color, hostname, status)
+    if pixmap_data is None:
+        from PyQt5.QtGui import QPixmap
+        pixmap = QPixmap(480, 260)
+        pixmap.fill()
+        return pixmap
+    return _render_pixmap_from_datos(pixmap_data)
+
+
+def generar_mapa_datos(lat, lon, ip, ciudad="", pais="", color="#E81123",
+                        hostname="", status="public"):
+    """Retorna dict con datos para renderizar el mapa en el hilo GUI.
+    Evita crear QPixmap en threads no-GUI."""
     from staticmap import StaticMap, CircleMarker
-    from PyQt5.QtGui import QPixmap, QImage
 
     try:
         UNIPAZ_LAT, UNIPAZ_LON = 7.069694, -73.745340
@@ -296,12 +308,21 @@ def generar_mapa_pixmap(lat, lon, ip, ciudad="", pais="", color="#E81123",
             image = m.render(zoom=zoom)
 
         buf = image.tobytes("raw", "RGB")
-        qimg = QImage(buf, image.width, image.height, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg)
-        return pixmap
+        return {"buf": buf, "width": image.width, "height": image.height}
 
     except Exception as e:
-        logger.error(f"Error generando mapa: {e}")
+        logger.error(f"Error generando datos de mapa: {e}")
+        return None
+
+
+def _render_pixmap_from_datos(datos):
+    """Renderiza QPixmap desde datos dict. Ejecutar en hilo GUI."""
+    from PyQt5.QtGui import QPixmap, QImage
+    try:
+        qimg = QImage(datos["buf"], datos["width"], datos["height"],
+                      QImage.Format_RGB888)
+        return QPixmap.fromImage(qimg)
+    except Exception:
         pixmap = QPixmap(480, 260)
         pixmap.fill()
         return pixmap
